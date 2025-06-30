@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Search, Send, Filter, X, Calendar, User, FileText, ChevronDown, Settings, Sparkles, Bot, Clock, TrendingUp, Database, Mic, MicOff, Copy, ThumbsUp, ThumbsDown, Share2, Download, Bookmark, MessageSquare, Brain, Zap, Shield, Globe, BarChart3, Eye, EyeOff, Moon, Sun, Palette, Volume2, VolumeX } from 'lucide-react';
+import { Search, Send, Filter, X, Calendar, User, FileText, ChevronDown, Settings, Sparkles, Bot, Clock, TrendingUp, Database, Mic, MicOff, Copy, ThumbsUp, ThumbsDown, Share2, Download, Bookmark, MessageSquare, Brain, Zap, Shield, Globe, BarChart3, Eye, EyeOff, Moon, Sun, Palette, Volume2, VolumeX, AlertCircle } from 'lucide-react';
+import { ragService, AzureServiceError, type AzureSearchDocument } from './services/azureServices';
 
 // Type definitions
 interface Source {
@@ -25,20 +26,21 @@ interface Message {
 
 interface Author {
   name: string;
-  expertise: string;
-  documents: number;
+  expertise?: string;
+  count: number;
 }
 
 interface Document {
-  id: number;
+  id: string;
   name: string;
   author: string;
   date: string;
   type: string;
-  size: string;
+  size?: string;
   category: string;
-  status: string;
-  downloads: number;
+  status?: string;
+  downloads?: number;
+  content?: string;
 }
 
 interface DateRange {
@@ -184,9 +186,22 @@ const RAGChatbot = () => {
   const [darkMode, setDarkMode] = useState<boolean>(false);
   const [audioEnabled, setAudioEnabled] = useState<boolean>(false);
 
+  // Error handling
+  const [error, setError] = useState<string | null>(null);
+  const [serviceStatus, setServiceStatus] = useState<{
+    connected: boolean;
+    message?: string;
+  }>({ connected: false });
+
+  // Data loading states
+  const [isLoadingFilters, setIsLoadingFilters] = useState<boolean>(true);
+  const [azureDocuments, setAzureDocuments] = useState<Document[]>([]);
+  const [azureAuthors, setAzureAuthors] = useState<Author[]>([]);
+  const [azureCategories, setAzureCategories] = useState<string[]>([]);
+
   // Advanced states
   const [conversationMode, setConversationMode] = useState<string>('standard'); // standard, creative, analytical
-  const [selectedModel, setSelectedModel] = useState<string>('gpt-4-turbo');
+  const [selectedModel, setSelectedModel] = useState<string>('gpt-4');
   const [temperature, setTemperature] = useState<number>(0.7);
   const [maxTokens, setMaxTokens] = useState<number>(2000);
   const [showAdvancedSettings, setShowAdvancedSettings] = useState<boolean>(false);
@@ -194,7 +209,7 @@ const RAGChatbot = () => {
   // Filter states
   const [selectedAuthors, setSelectedAuthors] = useState<string[]>([]);
   const [dateRange, setDateRange] = useState<DateRange>({ start: '', end: '' });
-  const [selectedDocuments, setSelectedDocuments] = useState<number[]>([]);
+  const [selectedDocuments, setSelectedDocuments] = useState<string[]>([]);
   const [documentSearchTerm, setDocumentSearchTerm] = useState<string>('');
   const [selectedCategories, setSelectedCategories] = useState<string[]>([]);
 
@@ -233,7 +248,7 @@ const RAGChatbot = () => {
       case 'authors':
         const filteredAuthors = authors.filter(author =>
           author.name.toLowerCase().includes(authorSearchTerm.toLowerCase()) ||
-          author.expertise.toLowerCase().includes(authorSearchTerm.toLowerCase())
+          (author.expertise && author.expertise.toLowerCase().includes(authorSearchTerm.toLowerCase()))
         );
         setSelectedAuthors(filteredAuthors.map(a => a.name));
         break;
@@ -244,7 +259,7 @@ const RAGChatbot = () => {
         setSelectedCategories(filteredCategories);
         break;
       case 'documents':
-        setSelectedDocuments(filteredDocuments.map(d => d.id));
+        setSelectedDocuments(filteredDocuments.map(d => d.id.toString()));
         break;
     }
   };
@@ -269,7 +284,7 @@ const RAGChatbot = () => {
     selectedCategories.forEach(cat => chips.push({ type: 'category', value: cat, label: cat }));
     selectedDocuments.forEach(docId => {
       const doc = documents.find(d => d.id === docId);
-      if (doc) chips.push({ type: 'document', value: docId, label: doc.name });
+      if (doc) chips.push({ type: 'document', value: docId.toString(), label: doc.name });
     });
     if (dateRange.start || dateRange.end) {
       chips.push({ 
@@ -298,62 +313,12 @@ const RAGChatbot = () => {
     }
   };
 
-  // Enhanced mock data
-  const authors = [
-    { name: 'Dr. Sarah Johnson', expertise: 'Risk Management', documents: 23 },
-    { name: 'Prof. Michael Chen', expertise: 'Market Analysis', documents: 18 },
-    { name: 'Dr. Emma Williams', expertise: 'Investment Strategy', documents: 31 },
-    { name: 'James Rodriguez', expertise: 'Compliance', documents: 15 },
-    { name: 'Dr. Lisa Anderson', expertise: 'Digital Banking', documents: 27 },
-    { name: 'Thomas Mitchell', expertise: 'Credit Risk', documents: 19 },
-    { name: 'Dr. Rachel Green', expertise: 'ESG & Sustainability', documents: 22 },
-    { name: 'David Kumar', expertise: 'Cybersecurity', documents: 16 },
-    { name: 'Dr. Amanda Foster', expertise: 'Customer Analytics', documents: 25 },
-    { name: 'Prof. Robert Taylor', expertise: 'Financial Modeling', documents: 20 },
-    { name: 'Dr. Jennifer Walsh', expertise: 'Regulatory Affairs', documents: 17 },
-    { name: 'Mark Thompson', expertise: 'Operations Risk', documents: 14 },
-    { name: 'Dr. Sophia Martinez', expertise: 'AI & Machine Learning', documents: 29 },
-    { name: 'Alex Chen', expertise: 'Blockchain Technology', documents: 12 },
-    { name: 'Dr. Patricia Davis', expertise: 'Sustainable Finance', documents: 26 }
-  ];
+  // Use Azure data when available, fallback to empty arrays
+  const authors = azureAuthors;
+  const categories = azureCategories;
 
-  const categories = [
-    'Risk Management', 
-    'Market Analysis', 
-    'Investment Strategy', 
-    'Compliance', 
-    'Digital Banking', 
-    'ESG & Sustainability', 
-    'Cybersecurity', 
-    'Customer Analytics',
-    'Financial Modeling',
-    'Regulatory Affairs',
-    'Operations Risk',
-    'AI & Machine Learning',
-    'Blockchain Technology',
-    'Sustainable Finance',
-    'Credit Risk',
-    'Market Research',
-    'Portfolio Management',
-    'Fraud Detection',
-    'Data Governance',
-    'Business Intelligence'
-  ];
-
-  const documents = [
-    { id: 1, name: 'Financial Risk Assessment 2024', author: 'Dr. Sarah Johnson', date: '2024-01-15', type: 'Report', size: '2.3MB', category: 'Risk Management', status: 'active', downloads: 1250 },
-    { id: 2, name: 'Market Analysis Report Q1', author: 'Prof. Michael Chen', date: '2024-02-20', type: 'Analysis', size: '1.8MB', category: 'Market Analysis', status: 'active', downloads: 890 },
-    { id: 3, name: 'Investment Strategy Guidelines', author: 'Dr. Emma Williams', date: '2024-01-30', type: 'Guidelines', size: '3.1MB', category: 'Investment Strategy', status: 'active', downloads: 2100 },
-    { id: 4, name: 'Regulatory Compliance Framework', author: 'James Rodriguez', date: '2024-03-10', type: 'Framework', size: '4.2MB', category: 'Compliance', status: 'draft', downloads: 670 },
-    { id: 5, name: 'Digital Banking Transformation', author: 'Dr. Lisa Anderson', date: '2024-02-05', type: 'Strategy', size: '2.7MB', category: 'Digital Banking', status: 'active', downloads: 1560 },
-    { id: 6, name: 'ESG Impact Assessment', author: 'Dr. Rachel Green', date: '2024-01-22', type: 'Report', size: '1.9MB', category: 'ESG & Sustainability', status: 'active', downloads: 980 },
-    { id: 7, name: 'Cybersecurity Threat Analysis', author: 'David Kumar', date: '2024-02-14', type: 'Analysis', size: '2.1MB', category: 'Cybersecurity', status: 'active', downloads: 1200 },
-    { id: 8, name: 'Customer Behavior Insights', author: 'Dr. Amanda Foster', date: '2024-02-28', type: 'Report', size: '3.5MB', category: 'Customer Analytics', status: 'active', downloads: 1450 },
-    { id: 9, name: 'Financial Modeling Best Practices', author: 'Prof. Robert Taylor', date: '2024-01-18', type: 'Guidelines', size: '2.8MB', category: 'Financial Modeling', status: 'active', downloads: 1120 },
-    { id: 10, name: 'Regulatory Update Bulletin', author: 'Dr. Jennifer Walsh', date: '2024-03-05', type: 'Bulletin', size: '1.2MB', category: 'Regulatory Affairs', status: 'active', downloads: 850 },
-    { id: 11, name: 'Operations Risk Metrics', author: 'Mark Thompson', date: '2024-02-12', type: 'Report', size: '2.6MB', category: 'Operations Risk', status: 'active', downloads: 950 },
-    { id: 12, name: 'AI Implementation Roadmap', author: 'Dr. Sophia Martinez', date: '2024-01-25', type: 'Strategy', size: '4.1MB', category: 'AI & Machine Learning', status: 'draft', downloads: 1800 }
-  ];
+  // Use Azure documents when available, fallback to empty array
+  const documents = azureDocuments;
 
   const quickPrompts = [
     { text: "Summarize latest risk reports", icon: Shield },
@@ -363,15 +328,15 @@ const RAGChatbot = () => {
   ];
 
   const models = [
-    { id: 'gpt-4-turbo', name: 'GPT-4 Turbo', description: 'Most capable, best for complex analysis' },
-    { id: 'gpt-4', name: 'GPT-4', description: 'Balanced performance and cost' },
-    { id: 'claude-3', name: 'Claude 3', description: 'Excellent for financial documents' }
+    { id: 'gpt-4', name: 'GPT-4', description: 'Most capable, best for complex analysis' },
+    { id: 'gpt-4-turbo', name: 'GPT-4 Turbo', description: 'Faster responses with excellent quality' },
+    { id: 'gpt-35-turbo', name: 'GPT-3.5 Turbo', description: 'Cost-effective for simpler queries' }
   ];
 
   // Enhanced functions and filtered data
   const filteredAuthors = authors.filter(author =>
     author.name.toLowerCase().includes(authorSearchTerm.toLowerCase()) ||
-    author.expertise.toLowerCase().includes(authorSearchTerm.toLowerCase())
+    (author.expertise && author.expertise.toLowerCase().includes(authorSearchTerm.toLowerCase()))
   );
 
   const filteredCategories = categories.filter(category =>
@@ -396,6 +361,57 @@ const RAGChatbot = () => {
   useEffect(() => {
     scrollToBottom();
   }, [messages]);
+
+  // Load initial data from Azure services
+  useEffect(() => {
+    const loadAzureData = async () => {
+      try {
+        setIsLoadingFilters(true);
+        setError(null);
+        
+        // Load available filters from Azure Search
+        const filters = await ragService.getAvailableFilters();
+        
+        setAzureAuthors(filters.authors);
+        setAzureCategories(filters.categories.map(c => c.name));
+        
+        // Load initial document list (empty search to get all)
+        const searchResult = await ragService.processQuery('*', {}, { topDocuments: 50 });
+        
+        // Convert search results to Document format
+        const docs: Document[] = searchResult.sources.map(source => ({
+          id: source.id,
+          name: source.name,
+          author: source.author,
+          date: new Date().toISOString().split('T')[0], // Default to today if no date
+          type: source.type,
+          category: source.category,
+          status: 'active'
+        }));
+        
+        setAzureDocuments(docs);
+        setServiceStatus({ connected: true, message: 'Connected to Azure services' });
+        
+      } catch (err) {
+        console.error('Failed to load Azure data:', err);
+        if (err instanceof AzureServiceError) {
+          setError(`Azure ${err.service} error: ${err.message}`);
+        } else {
+          setError('Failed to connect to Azure services. Please check your configuration.');
+        }
+        setServiceStatus({ connected: false, message: 'Azure services unavailable' });
+        
+        // Set empty fallback data
+        setAzureAuthors([]);
+        setAzureCategories([]);
+        setAzureDocuments([]);
+      } finally {
+        setIsLoadingFilters(false);
+      }
+    };
+
+    loadAzureData();
+  }, []);
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -431,56 +447,93 @@ const RAGChatbot = () => {
     setInputMessage('');
     setIsLoading(true);
     setQueryCount(prev => prev + 1);
+    setError(null);
 
-    // Simulate advanced RAG processing
-    setTimeout(() => {
-      const processingTime = Math.random() * 2 + 1;
-      const confidence = Math.random() * 0.3 + 0.7;
-      const tokens = Math.floor(Math.random() * 1000) + 500;
+    try {
+      // Prepare filters for Azure Search
+      const filters = {
+        authors: selectedAuthors.length > 0 ? selectedAuthors : undefined,
+        categories: selectedCategories.length > 0 ? selectedCategories : undefined,
+        dateRange: (dateRange.start || dateRange.end) ? {
+          start: dateRange.start || undefined,
+          end: dateRange.end || undefined
+        } : undefined,
+        documentIds: selectedDocuments.length > 0 ? selectedDocuments : undefined
+      };
+
+      // Use Azure RAG service to process the query
+      const ragResult = await ragService.processQuery(
+        messageText,
+        filters,
+        {
+          temperature,
+          maxTokens,
+          model: selectedModel,
+          topDocuments: 10
+        }
+      );
 
       const botResponse: Message = {
         id: messages.length + 2,
         type: 'bot',
-        content: `I've analyzed your query "${messageText}" using ${selectedModel} with ${conversationMode} mode. Here's my comprehensive response:
-
-**Key Insights:**
-• Cross-referenced analysis across ${selectedDocuments.length || 'all'} filtered documents
-• Applied ${temperature > 0.5 ? 'creative' : 'analytical'} reasoning approach
-• Generated response with ${Math.round(confidence * 100)}% confidence
-
-**Analysis Results:**
-The filtered dataset reveals significant patterns and correlations. Based on the selected parameters (Temperature: ${temperature}, Max Tokens: ${maxTokens}), I've prioritized ${conversationMode === 'analytical' ? 'data-driven insights' : conversationMode === 'creative' ? 'innovative perspectives' : 'balanced analysis'}.
-
-**Recommendations:**
-1. Consider the highlighted source documents for deeper analysis
-2. Cross-validate findings with recent regulatory updates
-3. Monitor emerging trends in the identified categories
-
-This response leverages advanced RAG techniques with semantic search, document ranking, and context-aware generation to provide you with the most relevant and accurate information.`,
+        content: ragResult.response,
         timestamp: new Date(),
-        sources: [
-          { name: 'Financial Risk Assessment 2024', author: 'Dr. Sarah Johnson', relevance: 0.95, type: 'Report', category: 'Risk Management' },
-          { name: 'Market Analysis Report Q1', author: 'Prof. Michael Chen', relevance: 0.87, type: 'Analysis', category: 'Market Analysis' },
-          { name: 'Investment Strategy Guidelines', author: 'Dr. Emma Williams', relevance: 0.82, type: 'Guidelines', category: 'Investment Strategy' }
-        ],
-        confidence: confidence,
-        tokens: tokens,
-        processingTime: processingTime,
-        model: selectedModel,
+        sources: ragResult.sources.map(source => ({
+          name: source.name,
+          author: source.author,
+          relevance: source.relevance,
+          type: source.type,
+          category: source.category
+        })),
+        confidence: ragResult.confidence,
+        tokens: ragResult.tokens,
+        processingTime: ragResult.processingTime,
+        model: ragResult.model,
         temperature: temperature
       };
 
       setMessages(prev => [...prev, botResponse]);
-      setIsLoading(false);
 
       // Text-to-speech if enabled
       if (audioEnabled && 'speechSynthesis' in window) {
-        const utterance = new SpeechSynthesisUtterance(botResponse.content.replace(/\*\*/g, '').replace(/•/g, ''));
+        const utterance = new SpeechSynthesisUtterance(
+          ragResult.response.replace(/\*\*/g, '').replace(/•/g, '').replace(/#{1,6}\s/g, '')
+        );
         utterance.rate = 0.9;
         utterance.pitch = 1;
         window.speechSynthesis.speak(utterance);
       }
-    }, 2500);
+
+    } catch (err) {
+      console.error('Failed to process message:', err);
+      
+      let errorMessage = 'Sorry, I encountered an error processing your request. ';
+      
+      if (err instanceof AzureServiceError) {
+        errorMessage += `Azure ${err.service} error: ${err.message}`;
+        setError(`Azure ${err.service} error: ${err.message}`);
+      } else {
+        errorMessage += 'Please try again or check your connection.';
+        setError('Failed to process your request. Please try again.');
+      }
+
+      const errorResponse: Message = {
+        id: messages.length + 2,
+        type: 'bot',
+        content: errorMessage,
+        timestamp: new Date(),
+        sources: [],
+        confidence: 0,
+        tokens: 0,
+        processingTime: 0,
+        model: selectedModel,
+        temperature: temperature
+      };
+
+      setMessages(prev => [...prev, errorResponse]);
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   const handleKeyPress = (e: React.KeyboardEvent) => {
@@ -529,7 +582,7 @@ This response leverages advanced RAG techniques with semantic search, document r
     );
   };
 
-  const toggleDocument = (docId: number) => {
+  const toggleDocument = (docId: string) => {
     setSelectedDocuments(prev =>
       prev.includes(docId)
         ? prev.filter(id => id !== docId)
@@ -638,6 +691,23 @@ This response leverages advanced RAG techniques with semantic search, document r
 
             {/* Enhanced Controls Section */}
             <div className="flex items-center gap-4">
+              {/* Service Status Badge */}
+              <div className={`relative px-4 py-2 rounded-full text-sm font-semibold shadow-lg ${
+                serviceStatus.connected
+                  ? darkMode 
+                    ? 'bg-gradient-to-r from-green-600/80 to-emerald-600/80 text-white border border-green-400/30' 
+                    : 'bg-gradient-to-r from-green-500 to-emerald-600 text-white border border-green-300/50'
+                  : darkMode
+                    ? 'bg-gradient-to-r from-red-600/80 to-rose-600/80 text-white border border-red-400/30'
+                    : 'bg-gradient-to-r from-red-500 to-rose-600 text-white border border-red-300/50'
+              }`}>
+                <div className="absolute inset-0 bg-white/20 rounded-full blur"></div>
+                <span className="relative flex items-center gap-2">
+                  <div className={`w-2 h-2 rounded-full ${serviceStatus.connected ? 'bg-white' : 'bg-white animate-pulse'}`}></div>
+                  {serviceStatus.connected ? 'Azure Connected' : 'Azure Offline'}
+                </span>
+              </div>
+
               {/* Active Filters Badge */}
               {activeFiltersCount > 0 && (
                 <div className={`relative px-4 py-2 rounded-full text-sm font-semibold shadow-lg ${
@@ -698,6 +768,33 @@ This response leverages advanced RAG techniques with semantic search, document r
           </div>
         </div>
       </div>
+
+      {/* Error Banner */}
+      {error && (
+        <div className={`mx-6 mt-4 p-4 rounded-lg border-l-4 ${
+          darkMode 
+            ? 'bg-red-900/20 border-red-600 text-red-100' 
+            : 'bg-red-50 border-red-500 text-red-800'
+        }`}>
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <AlertCircle className="w-5 h-5 text-red-500" />
+              <div>
+                <h4 className="font-semibold">Service Error</h4>
+                <p className="text-sm mt-1">{error}</p>
+              </div>
+            </div>
+            <button
+              onClick={() => setError(null)}
+              className={`p-1 rounded ${
+                darkMode ? 'hover:bg-red-800/30' : 'hover:bg-red-100'
+              }`}
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Messages Area */}
       <div className="flex-1 overflow-y-auto p-6 space-y-6">
@@ -1108,7 +1205,19 @@ This response leverages advanced RAG techniques with semantic search, document r
 
                                                                          {/* Authors List */}
                         <div className="space-y-2 max-h-96 overflow-y-auto custom-scrollbar">
-                          {filteredAuthors.map(author => (
+                          {isLoadingFilters ? (
+                            <div className="flex items-center justify-center py-8">
+                              <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-blue-600"></div>
+                              <span className="ml-2 text-sm text-gray-500">Loading authors from Azure...</span>
+                            </div>
+                          ) : filteredAuthors.length === 0 ? (
+                            <div className={`text-center py-8 ${darkMode ? 'text-gray-400' : 'text-gray-500'}`}>
+                              <User className="w-8 h-8 mx-auto mb-2 opacity-50" />
+                              <p className="text-sm">No authors found</p>
+                              <p className="text-xs mt-1">Try adjusting your search terms</p>
+                            </div>
+                          ) : (
+                            filteredAuthors.map(author => (
                             <label key={author.name} className={`flex items-start gap-3 cursor-pointer p-3 rounded-lg transition-colors group border ${
                               darkMode 
                                 ? 'hover:bg-gray-700 border-gray-600 hover:border-gray-500' 
@@ -1125,11 +1234,11 @@ This response leverages advanced RAG techniques with semantic search, document r
                                   {author.name}
                                 </div>
                                 <div className={`text-xs ${darkMode ? 'text-gray-400' : 'text-gray-500'}`}>
-                                  {author.expertise} • {author.documents} documents
+                                  {author.expertise || 'No expertise listed'} • {author.count} documents
                                 </div>
                               </div>
                             </label>
-                          ))}
+                          )))}
                         </div>
                       </div>
                     )}
