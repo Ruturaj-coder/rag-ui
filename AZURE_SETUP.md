@@ -7,9 +7,9 @@ This guide will help you configure your Azure services to work with the RAG chat
 You need the following Azure services set up:
 - ✅ **Azure AI Search** (Required - for document search)
 - ✅ **Azure OpenAI** (Required - for AI responses)
-- 🔄 **Azure Storage Account** (Optional - documents accessed via Search)
+- ✅ **Azure Storage Account** (Required - for clickable source file access)
 
-> **Note**: For the RAG workflow, documents are retrieved through Azure AI Search, so direct Storage Account access from the frontend is optional.
+> **Note**: For the RAG workflow, documents are retrieved through Azure AI Search. Azure Storage Account configuration is needed to enable clickable source files that open the original documents.
 
 ## Environment Configuration
 
@@ -27,7 +27,7 @@ VITE_AZURE_SEARCH_ENDPOINT=https://your-search-service.search.windows.net
 VITE_AZURE_SEARCH_API_KEY=your-search-admin-key
 VITE_AZURE_SEARCH_INDEX_NAME=your-document-index-name
 
-# Azure Storage Configuration (Optional - Not needed for RAG workflow)
+# Azure Storage Configuration (Required for clickable source files)
 VITE_AZURE_STORAGE_ACCOUNT_NAME=your-storage-account
 VITE_AZURE_STORAGE_CONTAINER_NAME=documents
 VITE_AZURE_STORAGE_ACCOUNT_KEY=your-storage-account-key
@@ -162,7 +162,8 @@ Once configured, you'll have access to:
 - 🔍 **Semantic document search** with Azure AI Search
 - 🤖 **AI-powered responses** with Azure OpenAI
 - 🏷️ **Dynamic filtering** by authors, categories, dates
-- 📊 **Source citations** with relevance scores
+- 📊 **Source citations** with normalized relevance scores (0-100%)
+- 📁 **Clickable source files** that open original documents from Azure Storage
 - 🎛️ **Model configuration** (temperature, max tokens)
 - 🎙️ **Voice input/output** capabilities
 

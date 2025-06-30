@@ -178,6 +178,26 @@ export class AzureSearchService {
 
       const result: AzureSearchResult = await response.json();
       
+      // Add debugging for the first few results
+      if (result.value && result.value.length > 0) {
+        console.log('🔍 Azure Search Results (first 3):', result.value.slice(0, 3).map(doc => {
+          const rawDoc = doc as any;
+          return {
+            // All metadata fields for debugging
+            metadata_storage_path: rawDoc.metadata_storage_path,
+            metadata_title: rawDoc.metadata_title,
+            metadata_author: rawDoc.metadata_author,
+            metadata_storage_content_type: rawDoc.metadata_storage_content_type,
+            metadata_storage_file_extension: rawDoc.metadata_storage_file_extension,
+            metadata_storage_size: rawDoc.metadata_storage_size,
+            content: rawDoc.content ? rawDoc.content.substring(0, 100) + '...' : 'No content',
+            '@search.score': rawDoc['@search.score'],
+            // Show ALL available fields
+            allFields: Object.keys(rawDoc).filter(key => !['content', '@search.score', '@search.highlights'].includes(key))
+          };
+        }));
+      }
+      
       return {
         documents: (result.value || []).map(mapAzureDocumentToFrontend),
         totalCount: result['@odata.count'] || 0
@@ -508,9 +528,47 @@ export const openAIService = new AzureOpenAIService();
 
 // Helper function to map Azure metadata fields to frontend format
 const mapAzureDocumentToFrontend = (azureDoc: any): AzureSearchDocument & { '@search.score'?: number } => {
-  return {
+  // Determine the best title for the document
+  let title = 'Untitled Document';
+  
+  if (azureDoc.metadata_title && azureDoc.metadata_title.trim()) {
+    title = azureDoc.metadata_title.trim();
+  } else if (azureDoc.metadata_storage_path) {
+    // Extract filename from storage path
+    const pathParts = azureDoc.metadata_storage_path.split('/');
+    let filename = pathParts[pathParts.length - 1];
+    
+    if (filename) {
+      // Decode URL encoding (handles spaces like %20)
+      try {
+        filename = decodeURIComponent(filename);
+      } catch (e) {
+        // If decoding fails, use as-is
+      }
+      
+      // Remove file extension for cleaner display
+      const lastDotIndex = filename.lastIndexOf('.');
+      if (lastDotIndex > 0) {
+        title = filename.substring(0, lastDotIndex);
+      } else {
+        title = filename;
+      }
+      
+      // Clean up the title (replace underscores, handle camelCase, etc.)
+      title = title
+        .replace(/[_-]/g, ' ')  // Replace underscores and dashes with spaces
+        .replace(/([a-z])([A-Z])/g, '$1 $2')  // Add space between camelCase
+        .replace(/\s+/g, ' ')  // Normalize multiple spaces
+        .trim();
+      
+      // Capitalize first letter of each word
+      title = title.replace(/\b\w/g, l => l.toUpperCase());
+    }
+  }
+
+  const mapped = {
     id: azureDoc.metadata_storage_path || azureDoc.id || '',
-    title: azureDoc.metadata_title || azureDoc.metadata_storage_name || 'Untitled Document',
+    title,
     content: azureDoc.content || '',
     author: azureDoc.metadata_author || 'Unknown Author',
     category: azureDoc.metadata_storage_content_type || 'Unknown Type',
@@ -527,6 +585,22 @@ const mapAzureDocumentToFrontend = (azureDoc: any): AzureSearchDocument & { '@se
     },
     '@search.score': azureDoc['@search.score'] // Preserve search score
   };
+
+  // Debug logging for title mapping
+  console.log('📄 Document mapping:', {
+    originalPath: azureDoc.metadata_storage_path,
+    originalTitle: azureDoc.metadata_title,
+    extractedTitle: title,
+    finalMapped: {
+      id: mapped.id,
+      title: mapped.title,
+      author: mapped.author,
+      type: mapped.type,
+      category: mapped.category
+    }
+  });
+
+  return mapped;
 };
 
 // Helper function to format bytes

@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Search, Send, Filter, X, Calendar, User, FileText, ChevronDown, Settings, Sparkles, Bot, Clock, TrendingUp, Database, Mic, MicOff, Copy, ThumbsUp, ThumbsDown, Share2, Download, Bookmark, MessageSquare, Brain, Zap, Shield, Globe, BarChart3, Eye, EyeOff, Moon, Sun, Palette, Volume2, VolumeX, AlertCircle } from 'lucide-react';
+import { Search, Send, Filter, X, Calendar, User, FileText, ChevronDown, Settings, Sparkles, Bot, Clock, TrendingUp, Database, Mic, MicOff, Copy, ThumbsUp, ThumbsDown, Share2, Download, Bookmark, MessageSquare, Brain, Zap, Shield, Globe, BarChart3, Eye, EyeOff, Moon, Sun, Palette, Volume2, VolumeX, AlertCircle, MapPin, Building, Star, Info } from 'lucide-react';
 import { ragService, AzureServiceError, type AzureSearchDocument } from './services/azureServices';
 
 // Type definitions
@@ -9,6 +9,7 @@ interface Source {
   relevance: number;
   type: string;
   category: string;
+  id: string; // Azure Storage path
 }
 
 interface Message {
@@ -66,33 +67,298 @@ declare global {
   }
 }
 
+// Helper function to generate Azure Storage URL
+const generateAzureStorageUrl = (filePath: string): string => {
+  const accountName = import.meta.env.VITE_AZURE_STORAGE_ACCOUNT_NAME;
+  const containerName = import.meta.env.VITE_AZURE_STORAGE_CONTAINER_NAME;
+  
+  if (!accountName || !containerName) {
+    console.warn('Azure Storage configuration not found');
+    return '#';
+  }
+
+  // Extract blob name from full Azure Storage path
+  let blobName = filePath;
+  
+  // If it's a full URL like: https://account.blob.core.windows.net/container/path/file.pdf
+  if (filePath.includes('blob.core.windows.net')) {
+    const urlParts = filePath.split('/');
+    const containerIndex = urlParts.findIndex(part => part === containerName);
+    if (containerIndex !== -1 && containerIndex < urlParts.length - 1) {
+      // Get everything after the container name and decode any existing encoding
+      blobName = urlParts.slice(containerIndex + 1).map(part => decodeURIComponent(part)).join('/');
+    }
+  }
+  
+  // If it starts with container name, remove it
+  if (blobName.startsWith(`${containerName}/`)) {
+    blobName = blobName.substring(containerName.length + 1);
+  }
+  
+  // Remove leading slash if present
+  blobName = blobName.startsWith('/') ? blobName.substring(1) : blobName;
+  
+  // Properly encode the blob name (handles spaces and special characters)
+  const encodedBlobName = blobName.split('/').map(part => encodeURIComponent(part)).join('/');
+  
+  const finalUrl = `https://${accountName}.blob.core.windows.net/${containerName}/${encodedBlobName}`;
+  
+  console.log('🔗 Generating URL:', {
+    originalPath: filePath,
+    extractedBlobName: blobName,
+    encodedBlobName: encodedBlobName,
+    finalUrl: finalUrl
+  });
+  
+  return finalUrl;
+};
+
+// Helper function to normalize relevance scores
+const normalizeRelevance = (score: number): number => {
+  // Azure Search scores can be much higher than 1.0
+  // Normalize to 0-1 range using a logarithmic scale for better distribution
+  if (score <= 0) return 0;
+  if (score >= 10) return 1; // Cap very high scores
+  
+  // Use a sigmoid-like function to normalize scores between 0-10 to 0-1
+  return Math.min(1, score / 10);
+};
+
+// Helper function to open file in new tab
+const openFile = (source: Source) => {
+  console.log('📁 Opening file:', {
+    sourceName: source.name,
+    sourceId: source.id,
+    sourceType: source.type
+  });
+  
+  const url = generateAzureStorageUrl(source.id);
+  if (url !== '#') {
+    console.log('✅ Opening URL:', url);
+    window.open(url, '_blank', 'noopener,noreferrer');
+  } else {
+    console.warn('❌ Cannot open file: Azure Storage configuration missing');
+    alert('Azure Storage is not configured. Please check your environment variables.');
+  }
+};
+
+// Enhanced Formatted Response Component
+const FormattedResponse: React.FC<{ content: string; darkMode: boolean }> = ({ content, darkMode }) => {
+  // Parse the content into structured sections
+  const parseContent = (text: string) => {
+    const lines = text.split('\n');
+    const sections: Array<{
+      type: 'header' | 'bullet' | 'text';
+      content: string;
+      level?: number;
+      icon?: React.ComponentType<{ className?: string }>;
+    }> = [];
+
+    let currentSection: any = null;
+
+    lines.forEach((line, index) => {
+      const trimmedLine = line.trim();
+      
+      if (trimmedLine.startsWith('###')) {
+        // Main section header
+        const headerText = trimmedLine.replace(/^#{1,6}\s*/, '').replace(/:\s*$/, '');
+        let icon = Info;
+        
+        // Assign icons based on content
+        const lowerContent = headerText.toLowerCase();
+        if (lowerContent.includes('location') || lowerContent.includes('dubai') || lowerContent.includes('vegas') || lowerContent.includes('london')) {
+          icon = MapPin;
+        } else if (lowerContent.includes('accommodation') || lowerContent.includes('hotel')) {
+          icon = Building;
+        } else if (lowerContent.includes('key') || lowerContent.includes('summary') || lowerContent.includes('overview')) {
+          icon = Star;
+        } else if (lowerContent.includes('risk') || lowerContent.includes('security') || lowerContent.includes('compliance')) {
+          icon = Shield;
+        } else if (lowerContent.includes('trend') || lowerContent.includes('market') || lowerContent.includes('analysis')) {
+          icon = TrendingUp;
+        } else if (lowerContent.includes('data') || lowerContent.includes('report') || lowerContent.includes('document')) {
+          icon = FileText;
+        } else if (lowerContent.includes('user') || lowerContent.includes('author') || lowerContent.includes('customer')) {
+          icon = User;
+        } else if (lowerContent.includes('calendar') || lowerContent.includes('date') || lowerContent.includes('time')) {
+          icon = Calendar;
+        }
+        
+        sections.push({
+          type: 'header',
+          content: headerText,
+          level: 3,
+          icon
+        });
+      } else if (trimmedLine.startsWith('##')) {
+        // Sub-section header
+        const headerText = trimmedLine.replace(/^#{1,6}\s*/, '').replace(/:\s*$/, '');
+        sections.push({
+          type: 'header',
+          content: headerText,
+          level: 2,
+          icon: Info
+        });
+      } else if (trimmedLine.startsWith('- **') || trimmedLine.startsWith('- ')) {
+        // Bullet point
+        let bulletContent = trimmedLine.replace(/^-\s*/, '');
+        
+        // Handle formatting
+        if (bulletContent.includes('**')) {
+          bulletContent = bulletContent.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+        }
+        if (bulletContent.includes('*') && !bulletContent.includes('**')) {
+          bulletContent = bulletContent.replace(/\*(.*?)\*/g, '<em>$1</em>');
+        }
+        
+        sections.push({
+          type: 'bullet',
+          content: bulletContent
+        });
+      } else if (/^\d+\.\s/.test(trimmedLine)) {
+        // Numbered list
+        let numberContent = trimmedLine.replace(/^\d+\.\s*/, '');
+        
+        // Handle formatting
+        if (numberContent.includes('**')) {
+          numberContent = numberContent.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+        }
+        if (numberContent.includes('*') && !numberContent.includes('**')) {
+          numberContent = numberContent.replace(/\*(.*?)\*/g, '<em>$1</em>');
+        }
+        
+        sections.push({
+          type: 'bullet', // Treat numbered lists similar to bullets for now
+          content: numberContent
+        });
+      } else if (trimmedLine) {
+        // Regular text
+        let textContent = trimmedLine;
+        
+        // Handle formatting
+        if (textContent.includes('**')) {
+          textContent = textContent.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+        }
+        if (textContent.includes('*') && !textContent.includes('**')) {
+          textContent = textContent.replace(/\*(.*?)\*/g, '<em>$1</em>');
+        }
+        
+        sections.push({
+          type: 'text',
+          content: textContent
+        });
+      }
+    });
+
+    return sections;
+  };
+
+  const sections = parseContent(content);
+
+  return (
+    <div className="space-y-4">
+      {sections.map((section, index) => {
+        if (section.type === 'header') {
+          const Icon = section.icon || Info;
+          return (
+            <div key={index} className={`relative ${section.level === 3 ? 'mb-6' : 'mb-4'}`}>
+              {section.level === 3 ? (
+                <div className={`relative p-4 rounded-xl border-l-4 ${
+                  darkMode 
+                    ? 'bg-gradient-to-r from-blue-900/30 to-blue-800/20 border-blue-400 bg-gray-800/50' 
+                    : 'bg-gradient-to-r from-blue-50 to-indigo-50 border-blue-500 bg-white/80'
+                }`}>
+                  <div className="flex items-center gap-3">
+                    <div className={`p-2 rounded-lg ${
+                      darkMode 
+                        ? 'bg-blue-600/80 text-white' 
+                        : 'bg-blue-600 text-white'
+                    }`}>
+                      <Icon className="w-5 h-5" />
+                    </div>
+                    <h3 className={`text-xl font-bold ${
+                      darkMode ? 'text-white' : 'text-gray-900'
+                    }`}>
+                      {section.content}
+                    </h3>
+                  </div>
+                </div>
+              ) : (
+                <div className="flex items-center gap-2 mb-3">
+                  <Icon className={`w-4 h-4 ${darkMode ? 'text-blue-400' : 'text-blue-600'}`} />
+                  <h4 className={`text-lg font-semibold ${
+                    darkMode ? 'text-gray-200' : 'text-gray-800'
+                  }`}>
+                    {section.content}
+                  </h4>
+                </div>
+              )}
+            </div>
+          );
+        } else if (section.type === 'bullet') {
+          return (
+            <div key={index} className={`ml-6 mb-3`}>
+              <div className="flex items-start gap-3 group">
+                <div className={`w-1.5 h-1.5 rounded-full mt-2 flex-shrink-0 transition-colors ${
+                  darkMode ? 'bg-blue-400 group-hover:bg-blue-300' : 'bg-blue-600 group-hover:bg-blue-700'
+                }`}></div>
+                <div 
+                  className={`text-sm leading-relaxed flex-1 ${
+                    darkMode ? 'text-gray-300' : 'text-gray-700'
+                  }`}
+                  dangerouslySetInnerHTML={{ __html: section.content }}
+                  style={{
+                    lineHeight: '1.6'
+                  }}
+                />
+              </div>
+            </div>
+          );
+        } else {
+          return (
+            <div 
+              key={index} 
+              className={`text-sm leading-relaxed ${
+                darkMode ? 'text-gray-300' : 'text-gray-700'
+              }`}
+              dangerouslySetInnerHTML={{ __html: section.content }}
+            />
+          );
+        }
+      })}
+    </div>
+  );
+};
+
 const RAGChatbot = () => {
   // Add custom scrollbar styles
   useEffect(() => {
     const style = document.createElement('style');
     style.textContent = `
-      .custom-scrollbar::-webkit-scrollbar {
-        width: 4px;
+      /* Improved scrollbar for all containers */
+      *::-webkit-scrollbar {
+        width: 6px;
+        height: 6px;
       }
-      .custom-scrollbar::-webkit-scrollbar-track {
+      *::-webkit-scrollbar-track {
         background: transparent;
       }
-      .custom-scrollbar::-webkit-scrollbar-thumb {
-        background: rgba(156, 163, 175, 0.5);
-        border-radius: 2px;
+      *::-webkit-scrollbar-thumb {
+        background: rgba(156, 163, 175, 0.4);
+        border-radius: 3px;
+        transition: background 0.2s ease;
       }
-      .custom-scrollbar::-webkit-scrollbar-thumb:hover {
-        background: rgba(156, 163, 175, 0.8);
+      *::-webkit-scrollbar-thumb:hover {
+        background: rgba(156, 163, 175, 0.7);
       }
-      .dark .custom-scrollbar::-webkit-scrollbar-thumb {
-        background: rgba(75, 85, 99, 0.7);
+      .dark *::-webkit-scrollbar-thumb {
+        background: rgba(75, 85, 99, 0.5);
       }
-      .dark .custom-scrollbar::-webkit-scrollbar-thumb:hover {
-        background: rgba(75, 85, 99, 0.9);
+      .dark *::-webkit-scrollbar-thumb:hover {
+        background: rgba(75, 85, 99, 0.8);
       }
-      .custom-scrollbar {
-        padding-right: 12px;
-        margin-right: -4px;
+      *::-webkit-scrollbar-corner {
+        background: transparent;
       }
       .fade-bottom {
         position: relative;
@@ -110,6 +376,12 @@ const RAGChatbot = () => {
       }
       .smooth-scroll {
         scroll-behavior: smooth;
+      }
+      /* Ensure smooth scrolling for all scroll containers */
+      div[style*="overflow-y: auto"] {
+        scroll-behavior: smooth;
+        scrollbar-width: thin;
+        scrollbar-color: rgba(156, 163, 175, 0.4) transparent;
       }
       .custom-checkbox {
         appearance: none;
@@ -223,8 +495,6 @@ const RAGChatbot = () => {
   // Search states for each category
   const [authorSearchTerm, setAuthorSearchTerm] = useState<string>('');
   const [categorySearchTerm, setCategorySearchTerm] = useState<string>('');
-
-
 
   // Analytics
   const [queryCount, setQueryCount] = useState<number>(142);
@@ -481,9 +751,10 @@ const RAGChatbot = () => {
         sources: ragResult.sources.map(source => ({
           name: source.name,
           author: source.author,
-          relevance: source.relevance,
+          relevance: source.relevance, // Raw Azure Search score
           type: source.type,
-          category: source.category
+          category: source.category,
+          id: source.id // Azure Storage path
         })),
         confidence: ragResult.confidence,
         tokens: ragResult.tokens,
@@ -855,44 +1126,106 @@ const RAGChatbot = () => {
                 )}
 
                 <div className={`leading-relaxed ${message.type === 'user' ? 'text-white' : darkMode ? 'text-gray-100' : 'text-gray-800'}`}>
-                  {message.content}
+                  {message.type === 'bot' ? (
+                    <FormattedResponse content={message.content} darkMode={darkMode} />
+                  ) : (
+                    message.content
+                  )}
                 </div>
 
                 {message.sources && message.sources.length > 0 && (
                   <div className={`mt-4 pt-3 border-t ${darkMode ? 'border-gray-700' : 'border-gray-200'}`}>
-                    <div className="flex items-center gap-2 mb-2">
-                      <FileText className={`w-3.5 h-3.5 ${darkMode ? 'text-gray-400' : 'text-gray-600'}`} />
-                      <span className={`text-xs font-semibold ${darkMode ? 'text-gray-300' : 'text-gray-700'}`}>Sources</span>
+                    <div className="flex items-center justify-between mb-3">
+                      <div className="flex items-center gap-2">
+                        <FileText className={`w-3.5 h-3.5 ${darkMode ? 'text-gray-400' : 'text-gray-600'}`} />
+                        <span className={`text-xs font-semibold ${darkMode ? 'text-gray-300' : 'text-gray-700'}`}>
+                          Sources ({message.sources.length})
+                        </span>
+                      </div>
+                      <span className={`text-xs ${darkMode ? 'text-gray-500' : 'text-gray-400'}`}>
+                        Click to open file
+                      </span>
                     </div>
                     <div className="space-y-2">
-                      {message.sources.map((source, idx) => (
-                        <div key={idx} className={`p-3 rounded-lg border transition-all group ${
-                          darkMode 
-                            ? 'bg-gray-700/50 border-gray-600/50 hover:bg-gray-700/70' 
-                            : 'bg-gray-50/80 border-gray-200/60 hover:bg-gray-100/80'
-                        }`}>
-                          <div className="flex items-start justify-between">
-                            <div className="flex-1 min-w-0">
-                              <div className="flex items-center gap-2 mb-1">
-                                <span className={`font-medium text-sm truncate ${darkMode ? 'text-gray-200' : 'text-gray-900'}`}>
-                                  {source.name}
-                                </span>
-                                <span className={`px-1.5 py-0.5 rounded text-xs font-medium ${getTypeColor(source.type)}`}>
-                                  {source.type}
-                                </span>
+                      {message.sources.map((source, idx) => {
+                        const normalizedRelevance = normalizeRelevance(source.relevance);
+                        const relevancePercentage = Math.round(normalizedRelevance * 100);
+                        
+                        return (
+                          <button
+                            key={idx}
+                            onClick={() => openFile(source)}
+                            className={`w-full p-3 rounded-lg border transition-all group cursor-pointer text-left ${
+                              darkMode 
+                                ? 'bg-gray-700/50 border-gray-600/50 hover:bg-gray-700/70 hover:border-gray-500/70' 
+                                : 'bg-gray-50/80 border-gray-200/60 hover:bg-gray-100/80 hover:border-gray-300/80'
+                            } hover:shadow-md hover:scale-[1.01]`}
+                            title="Click to open document"
+                          >
+                            <div className="flex items-start justify-between">
+                              <div className="flex-1 min-w-0">
+                                <div className="flex items-center gap-2 mb-2">
+                                  <span className={`font-medium text-sm truncate group-hover:text-blue-600 transition-colors ${
+                                    darkMode ? 'text-gray-200 group-hover:text-blue-400' : 'text-gray-900 group-hover:text-blue-600'
+                                  }`}>
+                                    {source.name}
+                                  </span>
+                                  <span className={`px-2 py-0.5 rounded text-xs font-medium ${getTypeColor(source.type)}`}>
+                                    {source.type}
+                                  </span>
+                                </div>
+                                <div className={`text-xs mb-2 ${darkMode ? 'text-gray-400' : 'text-gray-600'}`}>
+                                  <span className="flex items-center gap-1">
+                                    <User className="w-3 h-3" />
+                                    {source.author}
+                                  </span>
+                                </div>
+                                <div className={`text-xs ${darkMode ? 'text-gray-500' : 'text-gray-500'}`}>
+                                  {source.category}
+                                </div>
                               </div>
-                              <div className={`text-xs ${darkMode ? 'text-gray-400' : 'text-gray-600'}`}>
-                                {source.author} • {source.category}
+                              <div className="text-right ml-3 flex flex-col items-end gap-1">
+                                <div className={`text-xs font-bold px-2 py-1 rounded-full ${
+                                  relevancePercentage >= 80 
+                                    ? 'bg-green-100 text-green-800' 
+                                    : relevancePercentage >= 60 
+                                      ? 'bg-yellow-100 text-yellow-800' 
+                                      : 'bg-gray-100 text-gray-600'
+                                }`}>
+                                  {relevancePercentage}%
+                                </div>
+                                <div className={`w-12 h-1.5 rounded-full overflow-hidden ${
+                                  darkMode ? 'bg-gray-600' : 'bg-gray-200'
+                                }`}>
+                                  <div 
+                                    className={`h-full transition-all ${
+                                      relevancePercentage >= 80 
+                                        ? 'bg-green-500' 
+                                        : relevancePercentage >= 60 
+                                          ? 'bg-yellow-500' 
+                                          : 'bg-gray-400'
+                                    }`}
+                                    style={{ width: `${relevancePercentage}%` }}
+                                  />
+                                </div>
                               </div>
                             </div>
-                            <div className="text-right ml-2">
-                              <div className={`text-xs font-bold ${darkMode ? 'text-blue-400' : 'text-blue-600'}`}>
-                                {Math.round(source.relevance * 100)}%
+                            <div className={`mt-2 pt-2 border-t ${darkMode ? 'border-gray-600/50' : 'border-gray-200/50'}`}>
+                              <div className="flex items-center justify-between text-xs">
+                                <span className={`flex items-center gap-1 ${darkMode ? 'text-gray-400' : 'text-gray-500'}`}>
+                                  <Database className="w-3 h-3" />
+                                  Source Document
+                                </span>
+                                <span className={`text-blue-600 group-hover:text-blue-700 font-medium ${
+                                  darkMode ? 'text-blue-400 group-hover:text-blue-300' : ''
+                                }`}>
+                                  Open File →
+                                </span>
                               </div>
                             </div>
-                          </div>
-                        </div>
-                      ))}
+                          </button>
+                        );
+                      })}
                     </div>
                   </div>
                 )}
@@ -973,7 +1306,7 @@ const RAGChatbot = () => {
           <div className="absolute bottom-full left-0 right-0 mb-2 z-50">
             <div 
               ref={filterRef} 
-              className={`w-full max-w-6xl mx-auto max-h-[70vh] overflow-hidden rounded-xl shadow-2xl border ${
+              className={`w-full max-w-6xl mx-auto max-h-[80vh] overflow-hidden rounded-xl shadow-2xl border ${
                 darkMode ? 'bg-gray-800 border-gray-600' : 'bg-white border-gray-200'
               }`}
             >
@@ -1013,7 +1346,7 @@ const RAGChatbot = () => {
               </div>
 
               {/* Content */}
-              <div className="p-6 max-h-[calc(70vh-120px)] overflow-hidden">
+              <div className="p-6 max-h-[calc(80vh-120px)] overflow-hidden">
                 {/* Active Filter Chips */}
                 {getFilterChips().length > 0 && (
                   <div className="mb-4">
@@ -1044,7 +1377,7 @@ const RAGChatbot = () => {
                 )}
 
                 {/* 2-Column Filter Layout */}
-                <div className="flex h-[400px]">
+                <div className="flex" style={{ height: 'calc(60vh - 200px)', minHeight: '400px' }}>
                   {/* Left Column - Filter Category Buttons */}
                   <div className={`w-48 border-r pr-4 ${darkMode ? 'border-gray-600' : 'border-gray-200'}`}>
                     <h4 className={`text-sm font-semibold mb-3 ${darkMode ? 'text-gray-300' : 'text-gray-700'}`}>
@@ -1204,7 +1537,7 @@ const RAGChatbot = () => {
                         </div>
 
                                                                          {/* Authors List */}
-                        <div className="space-y-2 max-h-96 overflow-y-auto custom-scrollbar">
+                        <div className="space-y-2 overflow-y-auto pr-2" style={{ maxHeight: 'calc(50vh - 200px)' }}>
                           {isLoadingFilters ? (
                             <div className="flex items-center justify-center py-8">
                               <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-blue-600"></div>
@@ -1300,7 +1633,7 @@ const RAGChatbot = () => {
                         </div>
 
                                                  {/* Categories List */}
-                         <div className="space-y-2 max-h-96 overflow-y-auto custom-scrollbar">
+                         <div className="space-y-2 overflow-y-auto pr-2" style={{ maxHeight: 'calc(50vh - 200px)' }}>
                           {filteredCategories.map(category => (
                             <label key={category} className={`flex items-center justify-between gap-3 cursor-pointer p-3 rounded-lg transition-colors group border ${
                               darkMode 
@@ -1388,7 +1721,7 @@ const RAGChatbot = () => {
                         </div>
 
                                                                          {/* Documents List */}
-                        <div className="space-y-2 max-h-96 overflow-y-auto custom-scrollbar">
+                        <div className="space-y-2 overflow-y-auto pr-2" style={{ maxHeight: 'calc(50vh - 200px)' }}>
                           {filteredDocuments.length === 0 ? (
                             <div className={`text-center py-8 ${darkMode ? 'text-gray-400' : 'text-gray-500'}`}>
                               <FileText className="w-8 h-8 mx-auto mb-2 opacity-50" />
