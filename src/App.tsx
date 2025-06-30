@@ -209,6 +209,8 @@ const RAGChatbot = () => {
   const [authorSearchTerm, setAuthorSearchTerm] = useState<string>('');
   const [categorySearchTerm, setCategorySearchTerm] = useState<string>('');
 
+
+
   // Analytics
   const [queryCount, setQueryCount] = useState<number>(142);
   const [successRate, setSuccessRate] = useState<number>(94.2);
@@ -218,6 +220,8 @@ const RAGChatbot = () => {
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const filterRef = useRef<HTMLDivElement>(null);
   const filterButtonRef = useRef<HTMLButtonElement>(null);
+  const settingsRef = useRef<HTMLDivElement>(null);
+  const settingsButtonRef = useRef<HTMLButtonElement>(null);
 
   // Helper functions for filtering and selections
   const selectFilterCategory = (category: string) => {
@@ -401,6 +405,12 @@ const RAGChatbot = () => {
         !filterButtonRef.current.contains(event.target as Node)) {
         setShowFilters(false);
       }
+      if (settingsRef.current &&
+        !settingsRef.current.contains(event.target as Node) &&
+        settingsButtonRef.current &&
+        !settingsButtonRef.current.contains(event.target as Node)) {
+        setShowAdvancedSettings(false);
+      }
     };
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
@@ -579,42 +589,73 @@ This response leverages advanced RAG techniques with semantic search, document r
   return (
     <div className={`flex flex-col h-screen transition-colors duration-300 ${darkMode ? 'bg-gray-900 text-white' : 'bg-gradient-to-br from-slate-50 to-blue-50'
       }`}>
-      {/* Advanced Header */}
-      <div className={`border-b shadow-sm transition-colors ${darkMode ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-200'
-        }`}>
-        <div className="px-6 py-4">
+      {/* Enhanced Header */}
+      <div className={`relative border-b transition-all duration-300 ${
+        darkMode 
+          ? 'bg-gradient-to-r from-gray-900 via-gray-800 to-gray-900 border-gray-700/50' 
+          : 'bg-gradient-to-r from-blue-50 via-white to-blue-50 border-gray-200/80'
+      }`}>
+        {/* Subtle pattern overlay */}
+        <div className={`absolute inset-0 opacity-30 ${
+          darkMode 
+            ? 'bg-gradient-to-br from-blue-900/20 via-transparent to-purple-900/20' 
+            : 'bg-gradient-to-br from-blue-500/5 via-transparent to-indigo-500/5'
+        }`}></div>
+        
+                 <div className="relative px-8 py-4">
           <div className="flex items-center justify-between">
-            <div className="flex items-center gap-4">
-              <div className="flex items-center gap-3">
-                <div className="w-12 h-12 bg-white rounded-xl flex items-center justify-center shadow-lg p-1">
+            {/* Enhanced Brand Section */}
+            <div className="flex items-center gap-5">
+              <div className="relative group">
+                <div className="absolute -inset-1 bg-gradient-to-r from-blue-600 to-indigo-600 rounded-2xl blur opacity-25 group-hover:opacity-40 transition duration-300"></div>
+                <div className="relative w-14 h-14 bg-white rounded-2xl flex items-center justify-center shadow-xl">
                   <img 
                     src="/Barclays Logo.png" 
                     alt="Barclays Logo" 
-                    className="w-full h-full object-contain"
+                    className="w-10 h-10 object-contain"
                     onError={(e) => {
-                      // Fallback to Brain icon if logo doesn't load
                       e.currentTarget.style.display = 'none';
                       const parent = e.currentTarget.parentElement;
                       if (parent) {
-                        parent.classList.remove('bg-white', 'p-1');
-                        parent.classList.add('bg-gradient-to-br', 'from-blue-900', 'to-blue-700');
+                        parent.classList.remove('bg-white');
+                        parent.classList.add('bg-gradient-to-br', 'from-blue-600', 'via-blue-700', 'to-indigo-800');
                         parent.innerHTML = '<svg className="w-7 h-7 text-white" fill="currentColor" viewBox="0 0 24 24"><path d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>';
                       }
                     }}
                   />
                 </div>
-                <div>
-                  <h1 className="text-2xl font-bold">Barclays RAG Assistant</h1>
-                  <div className="flex items-center gap-2">
-
-                  </div>
-                </div>
+              </div>
+              <div>
+                <h1 className={`text-2xl font-bold tracking-tight bg-gradient-to-r ${
+                  darkMode 
+                    ? 'from-white to-gray-200 bg-clip-text text-transparent' 
+                    : 'from-gray-900 via-blue-900 to-indigo-900 bg-clip-text text-transparent'
+                }`}>
+                  Barclays RAG Assistant
+                </h1>
               </div>
             </div>
 
+            {/* Enhanced Controls Section */}
             <div className="flex items-center gap-4">
-              {/* Controls */}
-              <div className="flex items-center gap-2">
+              {/* Active Filters Badge */}
+              {activeFiltersCount > 0 && (
+                <div className={`relative px-4 py-2 rounded-full text-sm font-semibold shadow-lg ${
+                  darkMode 
+                    ? 'bg-gradient-to-r from-blue-600/80 to-indigo-600/80 text-white border border-blue-400/30' 
+                    : 'bg-gradient-to-r from-blue-500 to-indigo-600 text-white border border-blue-300/50'
+                }`}>
+                  <div className="absolute inset-0 bg-white/20 rounded-full blur"></div>
+                  <span className="relative">{activeFiltersCount} Filter{activeFiltersCount !== 1 ? 's' : ''}</span>
+                </div>
+              )}
+
+              {/* Enhanced Control Buttons */}
+              <div className={`flex items-center gap-2 p-2 rounded-xl backdrop-blur-sm shadow-lg ${
+                darkMode 
+                  ? 'bg-gray-800/80 border border-gray-700/50' 
+                  : 'bg-white/80 border border-gray-200/50'
+              }`}>
                 <button
                   onClick={() => {
                     if (audioEnabled && 'speechSynthesis' in window) {
@@ -622,96 +663,58 @@ This response leverages advanced RAG techniques with semantic search, document r
                     }
                     setAudioEnabled(!audioEnabled);
                   }}
-                  className={`p-2 rounded-lg transition-colors ${audioEnabled ? 'bg-blue-100 text-blue-800' : 'text-gray-600 hover:bg-gray-100'
-                    }`}
+                  className={`relative p-2.5 rounded-lg transition-all duration-300 group ${
+                    audioEnabled 
+                      ? 'bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow-md' 
+                      : darkMode
+                        ? 'text-gray-400 hover:text-white hover:bg-gradient-to-r hover:from-gray-700 hover:to-gray-600'
+                        : 'text-gray-600 hover:text-blue-700 hover:bg-gradient-to-r hover:from-blue-50 hover:to-indigo-50 hover:shadow-md'
+                  }`}
                   title="Toggle Text-to-Speech"
                 >
-                  {audioEnabled ? <Volume2 className="w-4 h-4" /> : <VolumeX className="w-4 h-4" />}
+                  {audioEnabled && (
+                    <div className="absolute inset-0 bg-blue-400/20 rounded-lg animate-pulse"></div>
+                  )}
+                  <div className="relative">
+                    {audioEnabled ? <Volume2 className="w-4 h-4" /> : <VolumeX className="w-4 h-4" />}
+                  </div>
                 </button>
 
                 <button
                   onClick={() => setDarkMode(!darkMode)}
-                  className="p-2 rounded-lg text-gray-600 hover:bg-gray-100 transition-colors"
+                  className={`relative p-2.5 rounded-lg transition-all duration-300 group ${
+                    darkMode
+                      ? 'text-gray-400 hover:text-white hover:bg-gradient-to-r hover:from-gray-700 hover:to-gray-600'
+                      : 'text-gray-600 hover:text-blue-700 hover:bg-gradient-to-r hover:from-blue-50 hover:to-indigo-50 hover:shadow-md'
+                  }`}
                   title="Toggle Dark Mode"
                 >
-                  {darkMode ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
+                  <div className="relative">
+                    {darkMode ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
+                  </div>
                 </button>
               </div>
-
-              {activeFiltersCount > 0 && (
-                <div className="bg-blue-100 text-blue-800 px-3 py-1 rounded-full text-sm font-medium animate-pulse">
-                  {activeFiltersCount} Active Filter{activeFiltersCount !== 1 ? 's' : ''}
-                </div>
-              )}
             </div>
           </div>
         </div>
       </div>
 
-
-
-      {/* Advanced Settings Panel */}
-      {showAdvancedSettings && (
-        <div className={`px-6 py-4 border-b ${darkMode ? 'bg-gray-800 border-gray-700' : 'bg-gray-50 border-gray-200'}`}>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <div>
-              <label className="block text-sm font-medium mb-2">AI Model</label>
-              <select
-                value={selectedModel}
-                onChange={(e) => setSelectedModel(e.target.value)}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
-              >
-                {models.map(model => (
-                  <option key={model.id} value={model.id}>{model.name}</option>
-                ))}
-              </select>
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium mb-2">Temperature: {temperature}</label>
-              <input
-                type="range"
-                min="0"
-                max="1"
-                step="0.1"
-                value={temperature}
-                onChange={(e) => setTemperature(parseFloat(e.target.value))}
-                className="w-full"
-              />
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium mb-2">Max Tokens: {maxTokens}</label>
-              <input
-                type="range"
-                min="500"
-                max="4000"
-                step="100"
-                value={maxTokens}
-                onChange={(e) => setMaxTokens(parseInt(e.target.value))}
-                className="w-full"
-              />
-            </div>
-          </div>
-        </div>
-      )}
-
       {/* Messages Area */}
       <div className="flex-1 overflow-y-auto p-6 space-y-6">
         {messages.map(message => (
           <div key={message.id} className={`flex ${message.type === 'user' ? 'justify-end' : 'justify-start'}`}>
-            <div className={`max-w-4xl w-full ${message.type === 'user' ? 'ml-12' : 'mr-12'}`}>
+            <div className={`max-w-3xl w-full ${message.type === 'user' ? 'ml-16' : 'mr-16'}`}>
               <div className={`${message.type === 'user'
-                  ? 'bg-gradient-to-r from-blue-900 to-blue-800 text-white ml-auto'
+                  ? 'bg-gradient-to-r from-blue-600 to-blue-700 text-white ml-auto'
                   : darkMode
-                    ? 'bg-gray-800 border border-gray-700 text-white'
-                    : 'bg-white border border-gray-200 shadow-sm'
-                } rounded-2xl p-6 backdrop-blur-sm transition-all hover:shadow-lg`}>
+                    ? 'bg-gray-800/90 border border-gray-700/50 text-white'
+                    : 'bg-white/80 backdrop-blur-sm border border-gray-200/60 shadow-lg'
+                } rounded-xl p-4 transition-all hover:shadow-xl`}>
 
                 {message.type === 'bot' && (
-                  <div className="flex items-center justify-between mb-4">
+                  <div className="flex items-center justify-between mb-3">
                     <div className="flex items-center gap-2">
-                      <div className="w-6 h-6 bg-white rounded-lg flex items-center justify-center p-0.5">
+                      <div className="w-5 h-5 bg-white rounded-lg flex items-center justify-center p-0.5">
                         <img 
                           src="/Barclays Logo.png" 
                           alt="Barclays Logo" 
@@ -721,71 +724,74 @@ This response leverages advanced RAG techniques with semantic search, document r
                             const parent = e.currentTarget.parentElement;
                             if (parent) {
                               parent.classList.remove('bg-white', 'p-0.5');
-                              parent.classList.add('bg-gradient-to-br', 'from-blue-900', 'to-blue-700');
-                              parent.innerHTML = '<svg className="w-4 h-4 text-white" fill="currentColor" viewBox="0 0 24 24"><path d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>';
+                              parent.classList.add('bg-gradient-to-br', 'from-blue-600', 'to-blue-700');
+                              parent.innerHTML = '<svg className="w-3 h-3 text-white" fill="currentColor" viewBox="0 0 24 24"><path d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>';
                             }
                           }}
                         />
                       </div>
-                      <span className="font-medium">AI Assistant</span>
-                      {message.model && (
-                        <span className="text-xs px-2 py-1 bg-gray-100 text-gray-600 rounded-full">
-                          {message.model}
-                        </span>
-                      )}
+                      <span className="text-sm font-semibold">AI Assistant</span>
                     </div>
 
-                    <div className="flex items-center gap-2">
-                      {message.confidence && (
-                        <span className={`px-2 py-1 rounded-full text-xs font-medium border ${getConfidenceColor(message.confidence)}`}>
-                          {Math.round(message.confidence * 100)}% Confidence
-                        </span>
-                      )}
+                    <div className="flex items-center gap-1">
                       <button
                         onClick={() => copyMessage(message.content)}
-                        className="p-1 text-gray-400 hover:text-gray-600 transition-colors"
+                        className={`p-1.5 rounded-md transition-colors ${
+                          darkMode ? 'hover:bg-gray-700 text-gray-400 hover:text-gray-200' : 'hover:bg-gray-100 text-gray-500 hover:text-gray-700'
+                        }`}
                         title="Copy message"
                       >
-                        <Copy className="w-4 h-4" />
+                        <Copy className="w-3.5 h-3.5" />
+                      </button>
+                      <button className={`p-1.5 rounded-md transition-colors ${
+                        darkMode ? 'hover:bg-gray-700 text-gray-400 hover:text-green-400' : 'hover:bg-gray-100 text-gray-500 hover:text-green-600'
+                      }`}>
+                        <ThumbsUp className="w-3.5 h-3.5" />
+                      </button>
+                      <button className={`p-1.5 rounded-md transition-colors ${
+                        darkMode ? 'hover:bg-gray-700 text-gray-400 hover:text-red-400' : 'hover:bg-gray-100 text-gray-500 hover:text-red-600'
+                      }`}>
+                        <ThumbsDown className="w-3.5 h-3.5" />
                       </button>
                     </div>
                   </div>
                 )}
 
-                <div className="whitespace-pre-wrap leading-relaxed">{message.content}</div>
+                <div className={`leading-relaxed ${message.type === 'user' ? 'text-white' : darkMode ? 'text-gray-100' : 'text-gray-800'}`}>
+                  {message.content}
+                </div>
 
                 {message.sources && message.sources.length > 0 && (
-                  <div className="mt-6 pt-4 border-t border-gray-100">
-                    <div className="flex items-center gap-2 mb-3">
-                      <FileText className="w-4 h-4 text-gray-600" />
-                      <span className="text-sm font-medium text-gray-700">Referenced Sources</span>
+                  <div className={`mt-4 pt-3 border-t ${darkMode ? 'border-gray-700' : 'border-gray-200'}`}>
+                    <div className="flex items-center gap-2 mb-2">
+                      <FileText className={`w-3.5 h-3.5 ${darkMode ? 'text-gray-400' : 'text-gray-600'}`} />
+                      <span className={`text-xs font-semibold ${darkMode ? 'text-gray-300' : 'text-gray-700'}`}>Sources</span>
                     </div>
-                    <div className="grid gap-3">
+                    <div className="space-y-2">
                       {message.sources.map((source, idx) => (
-                        <div key={idx} className="bg-gray-50 border border-gray-200 rounded-lg p-4 hover:shadow-sm transition-all group">
+                        <div key={idx} className={`p-3 rounded-lg border transition-all group ${
+                          darkMode 
+                            ? 'bg-gray-700/50 border-gray-600/50 hover:bg-gray-700/70' 
+                            : 'bg-gray-50/80 border-gray-200/60 hover:bg-gray-100/80'
+                        }`}>
                           <div className="flex items-start justify-between">
-                            <div className="flex-1">
+                            <div className="flex-1 min-w-0">
                               <div className="flex items-center gap-2 mb-1">
-                                <span className="font-medium text-gray-900 text-sm">{source.name}</span>
-                                <span className={`px-2 py-1 rounded-full text-xs font-medium border ${getTypeColor(source.type)}`}>
+                                <span className={`font-medium text-sm truncate ${darkMode ? 'text-gray-200' : 'text-gray-900'}`}>
+                                  {source.name}
+                                </span>
+                                <span className={`px-1.5 py-0.5 rounded text-xs font-medium ${getTypeColor(source.type)}`}>
                                   {source.type}
                                 </span>
-                                <span className="px-2 py-1 rounded-full text-xs bg-gray-200 text-gray-700">
-                                  {source.category}
-                                </span>
                               </div>
-                              <div className="text-xs text-gray-600">by {source.author}</div>
+                              <div className={`text-xs ${darkMode ? 'text-gray-400' : 'text-gray-600'}`}>
+                                {source.author} • {source.category}
+                              </div>
                             </div>
-                            <div className="flex items-center gap-2">
-                              <div className="text-right">
-                                <div className="text-sm font-medium text-blue-900">
-                                  {Math.round(source.relevance * 100)}%
-                                </div>
-                                <div className="text-xs text-gray-500">relevance</div>
+                            <div className="text-right ml-2">
+                              <div className={`text-xs font-bold ${darkMode ? 'text-blue-400' : 'text-blue-600'}`}>
+                                {Math.round(source.relevance * 100)}%
                               </div>
-                              <button className="opacity-0 group-hover:opacity-100 p-1 text-gray-400 hover:text-blue-600 transition-all">
-                                <Bookmark className="w-4 h-4" />
-                              </button>
                             </div>
                           </div>
                         </div>
@@ -794,27 +800,21 @@ This response leverages advanced RAG techniques with semantic search, document r
                   </div>
                 )}
 
-                <div className="flex items-center justify-between mt-4 pt-3 border-gray-100">
-                  <div className="flex items-center gap-4 text-xs text-gray-500">
-                    <span>{message.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
-                    {message.tokens && <span>{message.tokens} tokens</span>}
-                    {message.processingTime && <span>{message.processingTime.toFixed(1)}s</span>}
-                  </div>
-
-                  {message.type === 'bot' && (
-                    <div className="flex items-center gap-2">
-                      <button className="p-1 text-gray-400 hover:text-green-600 transition-colors">
-                        <ThumbsUp className="w-4 h-4" />
-                      </button>
-                      <button className="p-1 text-gray-400 hover:text-red-600 transition-colors">
-                        <ThumbsDown className="w-4 h-4" />
-                      </button>
-                      <button className="p-1 text-gray-400 hover:text-blue-600 transition-colors">
-                        <Share2 className="w-4 h-4" />
-                      </button>
+                {message.type === 'bot' && (
+                  <div className={`flex items-center justify-between mt-3 pt-2 border-t ${darkMode ? 'border-gray-700' : 'border-gray-200'}`}>
+                    <div className={`flex items-center gap-3 text-xs ${darkMode ? 'text-gray-400' : 'text-gray-500'}`}>
+                      <span>{message.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                      {message.tokens && <span>{message.tokens} tokens</span>}
                     </div>
-                  )}
-                </div>
+                    {message.model && (
+                      <span className={`text-xs px-2 py-0.5 rounded-full ${
+                        darkMode ? 'bg-gray-700 text-gray-300' : 'bg-gray-100 text-gray-600'
+                      }`}>
+                        {message.model}
+                      </span>
+                    )}
+                  </div>
+                )}
               </div>
             </div>
           </div>
@@ -1434,6 +1434,118 @@ This response leverages advanced RAG techniques with semantic search, document r
           </div>
         )}
 
+        {/* Advanced Settings Panel */}
+        {showAdvancedSettings && (
+          <div className="absolute bottom-full left-0 right-0 mb-2 z-50">
+            <div 
+              ref={settingsRef} 
+              className={`w-full max-w-2xl mx-auto rounded-xl shadow-2xl border ${
+                darkMode ? 'bg-gray-800 border-gray-600' : 'bg-white border-gray-200'
+              }`}
+            >
+              {/* Header */}
+              <div className={`px-6 py-4 border-b ${darkMode ? 'border-gray-700' : 'border-gray-200'}`}>
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h3 className="text-xl font-semibold">Settings</h3>
+                    <p className={`text-sm mt-1 ${darkMode ? 'text-gray-400' : 'text-gray-600'}`}>
+                      Configure AI model and behavior
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => setShowAdvancedSettings(false)}
+                    className={`p-2 rounded-lg transition-colors ${
+                      darkMode 
+                        ? 'text-gray-400 hover:text-gray-200 hover:bg-gray-700' 
+                        : 'text-gray-600 hover:text-gray-800 hover:bg-gray-100'
+                    }`}
+                  >
+                    <X className="w-5 h-5" />
+                  </button>
+                </div>
+              </div>
+
+              {/* Content */}
+              <div className="p-6 space-y-6">
+                {/* AI Model Selection */}
+                <div>
+                  <label className={`block text-sm font-semibold mb-3 ${darkMode ? 'text-gray-300' : 'text-gray-700'}`}>
+                    AI Model
+                  </label>
+                  <select
+                    value={selectedModel}
+                    onChange={(e) => setSelectedModel(e.target.value)}
+                    className={`w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors ${
+                      darkMode 
+                        ? 'bg-gray-700 border-gray-600 text-white' 
+                        : 'bg-white border-gray-300'
+                    }`}
+                  >
+                    {models.map(model => (
+                      <option key={model.id} value={model.id}>{model.name}</option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* Temperature */}
+                <div>
+                  <label className={`block text-sm font-semibold mb-3 ${darkMode ? 'text-gray-300' : 'text-gray-700'}`}>
+                    Temperature: {temperature}
+                  </label>
+                  <input
+                    type="range"
+                    min="0"
+                    max="1"
+                    step="0.1"
+                    value={temperature}
+                    onChange={(e) => setTemperature(parseFloat(e.target.value))}
+                    className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
+                  />
+                  <div className="flex justify-between text-xs text-gray-500 mt-1">
+                    <span>Focused</span>
+                    <span>Creative</span>
+                  </div>
+                </div>
+
+                {/* Max Tokens */}
+                <div>
+                  <label className={`block text-sm font-semibold mb-3 ${darkMode ? 'text-gray-300' : 'text-gray-700'}`}>
+                    Max Tokens: {maxTokens}
+                  </label>
+                  <input
+                    type="range"
+                    min="500"
+                    max="4000"
+                    step="100"
+                    value={maxTokens}
+                    onChange={(e) => setMaxTokens(parseInt(e.target.value))}
+                    className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
+                  />
+                  <div className="flex justify-between text-xs text-gray-500 mt-1">
+                    <span>Short</span>
+                    <span>Detailed</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Footer */}
+              <div className={`px-6 py-4 border-t ${darkMode ? 'border-gray-700' : 'border-gray-200'}`}>
+                <div className="flex items-center justify-between">
+                  <div className={`text-sm ${darkMode ? 'text-gray-400' : 'text-gray-600'}`}>
+                    Settings are automatically saved
+                  </div>
+                  <button
+                    onClick={() => setShowAdvancedSettings(false)}
+                    className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors font-medium"
+                  >
+                    Done
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Input Section */}
         <div className="px-6 py-4">
           <div className="max-w-2xl mx-auto">
@@ -1523,7 +1635,11 @@ This response leverages advanced RAG techniques with semantic search, document r
                 </button>
 
                 <button
-                  onClick={() => setShowAdvancedSettings(!showAdvancedSettings)}
+                  ref={settingsButtonRef}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setShowAdvancedSettings(!showAdvancedSettings);
+                  }}
                   className={`p-2 rounded-lg transition-colors ${showAdvancedSettings
                       ? 'bg-blue-100 text-blue-600'
                       : 'text-gray-400 hover:text-gray-600 hover:bg-gray-100'
