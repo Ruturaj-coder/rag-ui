@@ -107,6 +107,178 @@ export class AzureSearchService {
     }
   }
 
+  private fieldMapping: {
+    author?: string;
+    contentType?: string;
+    extension?: string;
+    title?: string;
+    lastModified?: string;
+    size?: string;
+    name?: string;
+  } = {};
+
+  private async discoverFieldMapping(): Promise<void> {
+    if (Object.keys(this.fieldMapping).length > 0) {
+      return; // Already discovered
+    }
+
+    try {
+      // Get a sample document to discover field names
+      const testParams = new URLSearchParams({
+        'api-version': '2023-11-01',
+        search: '*',
+        '$top': '1'
+      });
+
+      const testUrl = `${this.baseUrl}/indexes/${this.indexName}/docs?${testParams.toString()}`;
+      const testResponse = await fetch(testUrl, {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+          'api-key': this.apiKey
+        }
+      });
+
+      if (testResponse.ok) {
+        const testResult = await testResponse.json();
+        if (testResult.value && testResult.value.length > 0) {
+          const firstDoc = testResult.value[0];
+          const availableFields = Object.keys(firstDoc).filter(key => !key.startsWith('@'));
+          
+          // Map common fields
+          this.fieldMapping.author = availableFields.find(f => 
+            f.toLowerCase().includes('author') || f.toLowerCase().includes('creator') || f.toLowerCase().includes('writer') || f.toLowerCase().includes('by')
+          );
+          
+          this.fieldMapping.contentType = availableFields.find(f => 
+            f.toLowerCase().includes('type') || f.toLowerCase().includes('category') || f.toLowerCase().includes('content_type') || f.toLowerCase().includes('mime')
+          );
+          
+          this.fieldMapping.extension = availableFields.find(f => 
+            f.toLowerCase().includes('extension') || f.toLowerCase().includes('ext') || f.toLowerCase().includes('format')
+          );
+          
+          this.fieldMapping.title = availableFields.find(f => 
+            f.toLowerCase().includes('title') || f.toLowerCase().includes('name')
+          ) || availableFields.find(f => f.toLowerCase().includes('title'));
+          
+          this.fieldMapping.lastModified = availableFields.find(f => 
+            f.toLowerCase().includes('modified') || f.toLowerCase().includes('updated') || f.toLowerCase().includes('date')
+          );
+          
+          this.fieldMapping.size = availableFields.find(f => 
+            f.toLowerCase().includes('size') || f.toLowerCase().includes('length')
+          );
+          
+          this.fieldMapping.name = availableFields.find(f => 
+            f.toLowerCase().includes('name') && !f.toLowerCase().includes('filename')
+          );
+
+          console.log('🗂️ Field mapping discovered:', this.fieldMapping);
+        }
+      }
+    } catch (error) {
+      console.log('⚠️ Could not discover field mapping:', error);
+    }
+  }
+
+  private mapAzureDocumentToFrontend(azureDoc: any): AzureSearchDocument & { '@search.score'?: number } {
+    // Determine the best title for the document
+    let title = 'Untitled Document';
+    
+    const titleField = this.fieldMapping.title;
+    if (titleField && azureDoc[titleField] && azureDoc[titleField].trim()) {
+      title = azureDoc[titleField].trim();
+    } else if (azureDoc.metadata_storage_path) {
+      // Extract filename from storage path
+      const pathParts = azureDoc.metadata_storage_path.split('/');
+      let filename = pathParts[pathParts.length - 1];
+      
+      if (filename) {
+        // Decode URL encoding (handles spaces like %20)
+        try {
+          filename = decodeURIComponent(filename);
+        } catch (e) {
+          // If decoding fails, use as-is
+        }
+        
+        // Remove file extension for cleaner display
+        const lastDotIndex = filename.lastIndexOf('.');
+        if (lastDotIndex > 0) {
+          title = filename.substring(0, lastDotIndex);
+        } else {
+          title = filename;
+        }
+        
+        // Clean up the title (replace underscores, handle camelCase, etc.)
+        title = title
+          .replace(/[_-]/g, ' ')  // Replace underscores and dashes with spaces
+          .replace(/([a-z])([A-Z])/g, '$1 $2')  // Add space between camelCase
+          .replace(/\s+/g, ' ')  // Normalize multiple spaces
+          .trim();
+        
+        // Capitalize first letter of each word
+        title = title.replace(/\b\w/g, l => l.toUpperCase());
+      }
+    }
+
+    // Use discovered field names or fallback to standard names
+    const authorField = this.fieldMapping.author || 'metadata_author';
+    const contentTypeField = this.fieldMapping.contentType || 'metadata_storage_content_type';
+    const extensionField = this.fieldMapping.extension || 'metadata_storage_file_extension';
+    const lastModifiedField = this.fieldMapping.lastModified || 'metadata_storage_last_modified';
+    const sizeField = this.fieldMapping.size || 'metadata_storage_size';
+
+    const mapped = {
+      id: azureDoc.metadata_storage_path || azureDoc.id || '',
+      title,
+      content: azureDoc.content || '',
+      author: azureDoc[authorField] || 'Unknown Author',
+      category: azureDoc[contentTypeField] || 'Unknown Type',
+      type: azureDoc[extensionField]?.replace('.', '').toUpperCase() || 'Document',
+      date: azureDoc[lastModifiedField] || azureDoc.metadata_creation_date || new Date().toISOString(),
+      size: azureDoc[sizeField] ? this.formatBytes(azureDoc[sizeField]) : undefined,
+      status: 'active', // Default status
+      downloads: 0, // Not available in metadata
+      metadata: {
+        content_type: azureDoc.metadata_content_type,
+        language: azureDoc.metadata_language,
+        file_extension: azureDoc[extensionField],
+        content_md5: azureDoc.metadata_storage_content_md5
+      },
+      '@search.score': azureDoc['@search.score'] // Preserve search score
+    };
+
+    // Debug logging for title mapping
+    console.log('📄 Document mapping:', {
+      originalPath: azureDoc.metadata_storage_path,
+      originalTitle: titleField ? azureDoc[titleField] : undefined,
+      extractedTitle: title,
+      usedFields: {
+        author: { field: authorField, value: azureDoc[authorField] },
+        contentType: { field: contentTypeField, value: azureDoc[contentTypeField] },
+        extension: { field: extensionField, value: azureDoc[extensionField] }
+      },
+      finalMapped: {
+        id: mapped.id,
+        title: mapped.title,
+        author: mapped.author,
+        type: mapped.type,
+        category: mapped.category
+      }
+    });
+
+    return mapped;
+  }
+
+  private formatBytes(bytes: number): string {
+    if (bytes === 0) return '0 Bytes';
+    const k = 1024;
+    const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+  }
+
   async searchDocuments(
     query: string,
     filters?: {
@@ -118,26 +290,29 @@ export class AzureSearchService {
     top: number = 10
   ): Promise<{ documents: AzureSearchDocument[]; totalCount: number }> {
     try {
+      // Discover field mapping if not done yet
+      await this.discoverFieldMapping();
+
       const searchParams = new URLSearchParams({
         'api-version': '2023-11-01',
         search: query || '*',
         '$top': top.toString(),
         '$count': 'true',
         'searchMode': 'any',
-        'highlight': 'content,metadata_title',
-        'select': 'metadata_storage_path,metadata_title,content,metadata_author,metadata_storage_content_type,metadata_storage_last_modified,metadata_storage_size,metadata_storage_file_extension'
+        'highlight': `content${this.fieldMapping.title ? ',' + this.fieldMapping.title : ''}`,
+        'select': '*' // Select all fields initially, we'll map them in the response
       });
 
-      // Build filter string
+      // Build filter string using discovered field names
       const filterConditions = [];
       
-      if (filters?.authors && filters.authors.length > 0) {
-        const authorFilter = filters.authors.map(author => `metadata_author eq '${author.replace(/'/g, "''")}'`).join(' or ');
+      if (filters?.authors && filters.authors.length > 0 && this.fieldMapping.author) {
+        const authorFilter = filters.authors.map(author => `${this.fieldMapping.author} eq '${author.replace(/'/g, "''")}'`).join(' or ');
         filterConditions.push(`(${authorFilter})`);
       }
 
-      if (filters?.categories && filters.categories.length > 0) {
-        const categoryFilter = filters.categories.map(cat => `metadata_storage_content_type eq '${cat.replace(/'/g, "''")}'`).join(' or ');
+      if (filters?.categories && filters.categories.length > 0 && this.fieldMapping.contentType) {
+        const categoryFilter = filters.categories.map(cat => `${this.fieldMapping.contentType} eq '${cat.replace(/'/g, "''")}'`).join(' or ');
         filterConditions.push(`(${categoryFilter})`);
       }
 
@@ -146,12 +321,12 @@ export class AzureSearchService {
         filterConditions.push(`(${idFilter})`);
       }
 
-      if (filters?.dateRange?.start) {
-        filterConditions.push(`metadata_storage_last_modified ge ${filters.dateRange.start}T00:00:00Z`);
+      if (filters?.dateRange?.start && this.fieldMapping.lastModified) {
+        filterConditions.push(`${this.fieldMapping.lastModified} ge ${filters.dateRange.start}T00:00:00Z`);
       }
 
-      if (filters?.dateRange?.end) {
-        filterConditions.push(`metadata_storage_last_modified le ${filters.dateRange.end}T23:59:59Z`);
+      if (filters?.dateRange?.end && this.fieldMapping.lastModified) {
+        filterConditions.push(`${this.fieldMapping.lastModified} le ${filters.dateRange.end}T23:59:59Z`);
       }
 
       if (filterConditions.length > 0) {
@@ -199,7 +374,7 @@ export class AzureSearchService {
       }
       
       return {
-        documents: (result.value || []).map(mapAzureDocumentToFrontend),
+        documents: (result.value || []).map(doc => this.mapAzureDocumentToFrontend(doc)),
         totalCount: result['@odata.count'] || 0
       };
     } catch (error) {
@@ -238,7 +413,7 @@ export class AzureSearchService {
       }
 
       const azureDoc = await response.json();
-      return mapAzureDocumentToFrontend(azureDoc);
+      return this.mapAzureDocumentToFrontend(azureDoc);
     } catch (error) {
       if (error instanceof AzureServiceError) {
         throw error;
@@ -322,76 +497,121 @@ export class AzureSearchService {
         console.log('📂 Possible type/category fields:', possibleTypeFields);
       }
 
-      // Now try facets with the standard field names
-      const searchParams = new URLSearchParams({
-        'api-version': '2023-11-01',
-        search: '*',
-        '$top': '0'
-      });
-      
-      // Add facet parameters - try common field variations
-      const facetFields = [
-        'metadata_author',
-        'author', 
-        'metadata_storage_content_type',
-        'content_type',
-        'type',
-        'metadata_storage_file_extension',
-        'file_extension',
-        'extension'
-      ];
+      // Now discover what facetable fields actually exist and try those
+      let authorField = null;
+      let contentTypeField = null;
+      let extensionField = null;
 
-      // First try with just one facet to see which works
-      searchParams.append('facet', 'metadata_author,count:10');
-
-      const url = `${this.baseUrl}/indexes/${this.indexName}/docs?${searchParams.toString()}`;
-      console.log('🎯 Trying facets request:', url);
-
-      const response = await fetch(url, {
-        method: 'GET',
-        headers: {
-          'Content-Type': 'application/json',
-          'api-key': this.apiKey
-        }
-      });
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        console.error('❌ Facets request failed:', {
-          status: response.status,
-          statusText: response.statusText,
-          errorText,
-          url
-        });
+      if (testResult.value && testResult.value.length > 0) {
+        const firstDoc = testResult.value[0];
+        const availableFields = Object.keys(firstDoc).filter(key => !key.startsWith('@'));
         
-        // Return empty results instead of throwing error
-        console.log('🔄 Falling back to empty filters due to facets error');
-        return {
-          authors: [],
-          categories: [],
-          documentTypes: []
-        };
+        // Find the best author field
+        const possibleAuthorFields = availableFields.filter(field => 
+          field.toLowerCase().includes('author') || 
+          field.toLowerCase().includes('creator') ||
+          field.toLowerCase().includes('writer') ||
+          field.toLowerCase().includes('by')
+        );
+        authorField = possibleAuthorFields[0] || null;
+        
+        // Find the best content type field
+        const possibleTypeFields = availableFields.filter(field => 
+          field.toLowerCase().includes('type') || 
+          field.toLowerCase().includes('category') ||
+          field.toLowerCase().includes('content_type') ||
+          field.toLowerCase().includes('mime')
+        );
+        contentTypeField = possibleTypeFields[0] || null;
+        
+        // Find the best extension field
+        const possibleExtensionFields = availableFields.filter(field => 
+          field.toLowerCase().includes('extension') ||
+          field.toLowerCase().includes('ext') ||
+          field.toLowerCase().includes('format')
+        );
+        extensionField = possibleExtensionFields[0] || null;
+
+        console.log('🔍 Field mapping discovered:', {
+          authorField,
+          contentTypeField,
+          extensionField,
+          availableFields: availableFields.slice(0, 10) // Show first 10 fields
+        });
       }
 
-      const result = await response.json();
-      console.log('✅ Facets response received:', result);
-      const facets = result['@search.facets'] || {};
-      console.log('📊 Available facets:', Object.keys(facets));
-
-      return {
-        authors: (facets.metadata_author || []).map((facet: any) => ({
-          name: facet.value || 'Unknown',
-          count: facet.count || 0
-        })),
-        categories: (facets.metadata_storage_content_type || []).map((facet: any) => ({
-          name: facet.value || 'Unknown',
-          count: facet.count || 0
-        })),
-        documentTypes: (facets.metadata_storage_file_extension || []).map((facet: any) => ({
-          name: facet.value || 'Unknown',
-          count: facet.count || 0
-        }))
+      // Try to get facets for the fields we found
+      const results = {
+        authors: [] as Array<{ name: string; count: number }>,
+        categories: [] as Array<{ name: string; count: number }>,
+        documentTypes: [] as Array<{ name: string; count: number }>
       };
+
+      // Try each facet separately to see which ones work
+      const facetAttempts = [
+        { field: authorField, type: 'authors' },
+        { field: contentTypeField, type: 'categories' },
+        { field: extensionField, type: 'documentTypes' }
+      ];
+
+      for (const attempt of facetAttempts) {
+        if (!attempt.field) {
+          console.log(`⚠️ No suitable field found for ${attempt.type}`);
+          continue;
+        }
+
+        try {
+          const facetParams = new URLSearchParams({
+            'api-version': '2023-11-01',
+            search: '*',
+            '$top': '0'
+          });
+          
+          facetParams.append('facet', `${attempt.field},count:50`);
+          
+          const facetUrl = `${this.baseUrl}/indexes/${this.indexName}/docs?${facetParams.toString()}`;
+          console.log(`🎯 Trying facet for ${attempt.type} using field: ${attempt.field}`);
+
+          const facetResponse = await fetch(facetUrl, {
+            method: 'GET',
+            headers: {
+              'Content-Type': 'application/json',
+              'api-key': this.apiKey
+            }
+          });
+
+          if (facetResponse.ok) {
+            const facetResult = await facetResponse.json();
+            const facets = facetResult['@search.facets'] || {};
+            
+            if (facets[attempt.field]) {
+              const facetData = facets[attempt.field].map((facet: any) => ({
+                name: facet.value || 'Unknown',
+                count: facet.count || 0
+              }));
+              
+              if (attempt.type === 'authors') results.authors = facetData;
+              else if (attempt.type === 'categories') results.categories = facetData;
+              else if (attempt.type === 'documentTypes') results.documentTypes = facetData;
+              
+              console.log(`✅ Successfully got ${attempt.type} facets:`, facetData.slice(0, 3));
+            }
+          } else {
+            const errorText = await facetResponse.text();
+            console.log(`❌ Facet failed for ${attempt.field}:`, errorText);
+          }
+        } catch (error) {
+          console.log(`💥 Error trying facet for ${attempt.field}:`, error);
+        }
+      }
+
+      console.log('📊 Final facet results:', {
+        authors: results.authors.length,
+        categories: results.categories.length,
+        documentTypes: results.documentTypes.length
+      });
+
+      return results;
     } catch (error) {
       console.error('💥 getAvailableFilters error:', error);
       
