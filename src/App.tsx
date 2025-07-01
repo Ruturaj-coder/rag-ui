@@ -1073,10 +1073,12 @@ const RAGChatbot = () => {
           <div key={message.id} className={`flex ${message.type === 'user' ? 'justify-end' : 'justify-start'}`}>
             <div className={`max-w-3xl w-full ${message.type === 'user' ? 'ml-16' : 'mr-16'}`}>
               <div className={`${message.type === 'user'
-                  ? 'bg-gradient-to-r from-blue-600 to-blue-700 text-white ml-auto'
+                  ? darkMode 
+                    ? 'bg-gradient-to-r from-blue-600 to-blue-700 text-white ml-auto shadow-lg' 
+                    : 'bg-gradient-to-r from-blue-600 to-blue-700 text-white ml-auto'
                   : darkMode
-                    ? 'bg-gray-800/90 border border-gray-700/50 text-white'
-                    : 'bg-white/80 backdrop-blur-sm border border-gray-200/60 shadow-lg'
+                    ? 'bg-gray-800/95 border border-gray-700/60 text-white shadow-xl'
+                    : 'bg-white/90 backdrop-blur-sm border border-gray-200/60 shadow-lg'
                 } rounded-xl p-4 transition-all hover:shadow-xl`}>
 
                 {message.type === 'bot' && (
@@ -1300,7 +1302,11 @@ const RAGChatbot = () => {
       </div>
 
       {/* Input Area */}
-      <div className={`relative backdrop-blur-md bg-white/70 border border-white/20 shadow-xl mx-auto w-1/2 rounded-lg hover:shadow-2xl transition-all duration-300 hover:bg-white/80 mb-4 ${darkMode ? 'bg-gray-800/70 border-gray-600/30 hover:bg-gray-800/80' : ''}`}>
+      <div className={`relative mx-auto w-1/2 rounded-lg shadow-xl transition-all duration-300 mb-4 ${
+        darkMode 
+          ? 'backdrop-blur-md bg-gray-800/90 border border-gray-600/50 hover:bg-gray-800/95 hover:shadow-2xl' 
+          : 'backdrop-blur-md bg-white/70 border border-white/20 hover:bg-white/80 hover:shadow-2xl'
+      }`}>
         {/* Advanced Filters Panel */}
         {showFilters && (
           <div className="absolute bottom-full left-0 right-0 mb-2 z-50">
@@ -2004,9 +2010,9 @@ const RAGChatbot = () => {
                    }}
                    onKeyPress={handleKeyPress}
                    placeholder="Ask me anything about your documents... (Shift+Enter for new line)"
-                   className={`w-full px-4 py-3 pr-20 border rounded-lg focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 transition-all text-sm resize-none ${darkMode 
-                     ? 'bg-gray-700 border-gray-600 text-white placeholder-gray-400' 
-                     : 'bg-white border-gray-300 text-gray-900 placeholder-gray-500'
+                   className={`w-full px-4 py-3 pr-20 border rounded-lg focus:outline-none transition-all text-sm resize-none ${darkMode 
+                     ? 'bg-gray-700/90 border-gray-500/50 text-white placeholder-gray-400 focus:ring-1 focus:ring-blue-400 focus:border-blue-400 focus:bg-gray-700' 
+                     : 'bg-white/90 border-gray-300 text-gray-900 placeholder-gray-500 focus:ring-1 focus:ring-blue-500 focus:border-blue-500 focus:bg-white'
                    }`}
                    rows={1}
                    style={{ 
@@ -2026,8 +2032,12 @@ const RAGChatbot = () => {
                 <button
                   onClick={toggleVoiceInput}
                   className={`absolute right-12 top-1/2 transform -translate-y-1/2 p-1.5 rounded transition-colors ${isListening
-                      ? 'bg-red-100 text-red-600 animate-pulse'
-                      : 'text-gray-400 hover:text-gray-600 hover:bg-gray-100'
+                      ? darkMode 
+                        ? 'bg-red-900/30 text-red-400 animate-pulse border border-red-600/50' 
+                        : 'bg-red-100 text-red-600 animate-pulse'
+                      : darkMode
+                        ? 'text-gray-400 hover:text-gray-200 hover:bg-gray-600/50'
+                        : 'text-gray-400 hover:text-gray-600 hover:bg-gray-100'
                     }`}
                   disabled={isLoading}
                   title="Voice Input"
@@ -2041,8 +2051,10 @@ const RAGChatbot = () => {
                   disabled={!inputMessage.trim() || isLoading}
                   className={`absolute right-2 top-1/2 transform -translate-y-1/2 p-1.5 rounded transition-colors ${
                     !inputMessage.trim() || isLoading
-                      ? 'text-gray-400 cursor-not-allowed'
-                      : 'text-blue-600 hover:text-blue-700 hover:bg-blue-50'
+                      ? darkMode ? 'text-gray-500 cursor-not-allowed' : 'text-gray-400 cursor-not-allowed'
+                      : darkMode
+                        ? 'text-blue-400 hover:text-blue-300 hover:bg-blue-900/30'
+                        : 'text-blue-600 hover:text-blue-700 hover:bg-blue-50'
                   }`}
                   title="Send Message"
                 >
@@ -2063,14 +2075,20 @@ const RAGChatbot = () => {
                     setShowFilters(!showFilters);
                   }}
                   className={`relative p-2 rounded-lg transition-colors ${showFilters
-                      ? 'bg-blue-100 text-blue-600'
-                      : 'text-gray-400 hover:text-gray-600 hover:bg-gray-100'
+                      ? darkMode 
+                        ? 'bg-blue-900/50 text-blue-400 border border-blue-600/50' 
+                        : 'bg-blue-100 text-blue-600'
+                      : darkMode
+                        ? 'text-gray-400 hover:text-gray-200 hover:bg-gray-600/50'
+                        : 'text-gray-400 hover:text-gray-600 hover:bg-gray-100'
                     }`}
                   title="Advanced Filters"
                 >
                   <Filter className="w-4 h-4" />
                   {activeFiltersCount > 0 && (
-                    <span className="absolute -top-1 -right-1 bg-blue-600 text-white text-xs rounded-full w-4 h-4 flex items-center justify-center text-[10px]">
+                    <span className={`absolute -top-1 -right-1 text-white text-xs rounded-full w-4 h-4 flex items-center justify-center text-[10px] ${
+                      darkMode ? 'bg-blue-500' : 'bg-blue-600'
+                    }`}>
                       {activeFiltersCount}
                     </span>
                   )}
@@ -2083,8 +2101,12 @@ const RAGChatbot = () => {
                     setShowAdvancedSettings(!showAdvancedSettings);
                   }}
                   className={`p-2 rounded-lg transition-colors ${showAdvancedSettings
-                      ? 'bg-blue-100 text-blue-600'
-                      : 'text-gray-400 hover:text-gray-600 hover:bg-gray-100'
+                      ? darkMode 
+                        ? 'bg-blue-900/50 text-blue-400 border border-blue-600/50' 
+                        : 'bg-blue-100 text-blue-600'
+                      : darkMode
+                        ? 'text-gray-400 hover:text-gray-200 hover:bg-gray-600/50'
+                        : 'text-gray-400 hover:text-gray-600 hover:bg-gray-100'
                     }`}
                   title="Advanced Settings"
                 >
