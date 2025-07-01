@@ -115,6 +115,8 @@ export class AzureSearchService {
     lastModified?: string;
     size?: string;
     name?: string;
+    content?: string;
+    searchableContent?: string[];
   } = {};
 
   private async discoverFieldMapping(): Promise<void> {
@@ -174,7 +176,29 @@ export class AzureSearchService {
             f.toLowerCase().includes('name') && !f.toLowerCase().includes('filename')
           );
 
-          console.log('🗂️ Field mapping discovered:', this.fieldMapping);
+          // Find content fields - prioritize actual content over metadata
+          this.fieldMapping.content = availableFields.find(f => 
+            f.toLowerCase() === 'content' || 
+            f.toLowerCase() === 'text' || 
+            f.toLowerCase() === 'body' ||
+            f.toLowerCase() === 'description'
+          );
+
+          // Find all possible searchable content fields
+          this.fieldMapping.searchableContent = availableFields.filter(f => 
+            f.toLowerCase().includes('content') || 
+            f.toLowerCase().includes('text') || 
+            f.toLowerCase().includes('body') ||
+            f.toLowerCase().includes('description') ||
+            f.toLowerCase().includes('summary') ||
+            f.toLowerCase().includes('abstract')
+          );
+
+          console.log('🗂️ Field mapping discovered:', {
+            ...this.fieldMapping,
+            availableContentFields: this.fieldMapping.searchableContent,
+            primaryContentField: this.fieldMapping.content
+          });
         }
       }
     } catch (error) {
@@ -222,6 +246,32 @@ export class AzureSearchService {
       }
     }
 
+    // Extract content from the best available field
+    let content = '';
+    
+    // Try the mapped content field first
+    if (this.fieldMapping.content && azureDoc[this.fieldMapping.content]) {
+      content = azureDoc[this.fieldMapping.content];
+    } 
+    // Fallback to any available content fields
+    else if (this.fieldMapping.searchableContent) {
+      for (const contentField of this.fieldMapping.searchableContent) {
+        if (azureDoc[contentField] && azureDoc[contentField].trim()) {
+          content = azureDoc[contentField];
+          break;
+        }
+      }
+    }
+    // Last resort - try common field names
+    else {
+      content = azureDoc.content || 
+                azureDoc.text || 
+                azureDoc.body || 
+                azureDoc.description || 
+                azureDoc.summary || 
+                '';
+    }
+
     // Use discovered field names or fallback to standard names
     const authorField = this.fieldMapping.author || 'metadata_author';
     const contentTypeField = this.fieldMapping.contentType || 'metadata_storage_content_type';
@@ -232,7 +282,7 @@ export class AzureSearchService {
     const mapped = {
       id: azureDoc.metadata_storage_path || azureDoc.id || '',
       title,
-      content: azureDoc.content || '',
+      content: content, // Use the properly extracted content
       author: azureDoc[authorField] || 'Unknown Author',
       category: azureDoc[contentTypeField] || 'Unknown Type',
       type: azureDoc[extensionField]?.replace('.', '').toUpperCase() || 'Document',
@@ -249,11 +299,21 @@ export class AzureSearchService {
       '@search.score': azureDoc['@search.score'] // Preserve search score
     };
 
-    // Debug logging for title mapping
+    // Debug logging for title mapping and content extraction
+    const contentFieldUsed = this.fieldMapping.content && azureDoc[this.fieldMapping.content] ? 
+      this.fieldMapping.content : 
+      (this.fieldMapping.searchableContent?.find(f => azureDoc[f] && azureDoc[f].trim()) || 'none');
+
     console.log('📄 Document mapping:', {
       originalPath: azureDoc.metadata_storage_path,
       originalTitle: titleField ? azureDoc[titleField] : undefined,
       extractedTitle: title,
+      contentInfo: {
+        fieldUsed: contentFieldUsed,
+        contentLength: content ? content.length : 0,
+        hasContent: !!content,
+        contentPreview: content ? content.substring(0, 100) + '...' : 'NO CONTENT'
+      },
       usedFields: {
         author: { field: authorField, value: azureDoc[authorField] },
         contentType: { field: contentTypeField, value: azureDoc[contentTypeField] },
@@ -264,7 +324,8 @@ export class AzureSearchService {
         title: mapped.title,
         author: mapped.author,
         type: mapped.type,
-        category: mapped.category
+        category: mapped.category,
+        hasContent: !!mapped.content
       }
     });
 
@@ -293,15 +354,34 @@ export class AzureSearchService {
       // Discover field mapping if not done yet
       await this.discoverFieldMapping();
 
+      // Build search parameters - remove highlight if content field doesn't exist
       const searchParams = new URLSearchParams({
         'api-version': '2023-11-01',
         search: query || '*',
         '$top': top.toString(),
         '$count': 'true',
-        'searchMode': 'any',
-        'highlight': `content${this.fieldMapping.title ? ',' + this.fieldMapping.title : ''}`,
+        'searchMode': 'all', // Changed from 'any' to 'all' for better relevance
+        'queryType': 'simple',
         'select': '*' // Select all fields initially, we'll map them in the response
       });
+
+      // Only add highlight if we have actual content fields
+      const highlightFields = [];
+      if (this.fieldMapping.content) {
+        highlightFields.push(this.fieldMapping.content);
+      }
+      if (this.fieldMapping.title) {
+        highlightFields.push(this.fieldMapping.title);
+      }
+      if (this.fieldMapping.searchableContent && this.fieldMapping.searchableContent.length > 0) {
+        highlightFields.push(...this.fieldMapping.searchableContent.slice(0, 3)); // Limit to first 3
+      }
+      
+      if (highlightFields.length > 0) {
+        // Remove duplicates and join
+        const uniqueFields = [...new Set(highlightFields)];
+        searchParams.append('highlight', uniqueFields.join(','));
+      }
 
       // Build filter string using discovered field names
       const filterConditions = [];
@@ -767,18 +847,49 @@ export class RAGService {
 
       // Step 2: Prepare context from search results
       const context = searchResult.documents
-        .map(doc => `Document: ${doc.title}\nAuthor: ${doc.author || 'Unknown'}\nContent: ${doc.content || ''}`)
+        .map((doc, index) => {
+          const hasContent = doc.content && doc.content.trim().length > 0;
+          const contentSection = hasContent ? 
+            `Content: ${doc.content.trim()}` : 
+            `Content: [Document content not available - this is a ${doc.type} file: ${doc.title}]`;
+          
+          return `Document ${index + 1}: ${doc.title}
+Author: ${doc.author || 'Unknown'}
+Type: ${doc.type || 'Document'}
+Category: ${doc.category || 'General'}
+${contentSection}`;
+        })
         .join('\n\n---\n\n');
 
+      // Add debugging for context quality
+      const totalContentLength = searchResult.documents.reduce((sum, doc) => sum + (doc.content?.length || 0), 0);
+      const documentsWithContent = searchResult.documents.filter(doc => doc.content && doc.content.trim().length > 0).length;
+      
+      console.log('🤖 RAG Context Analysis:', {
+        totalDocuments: searchResult.documents.length,
+        documentsWithContent,
+        totalContentLength,
+        averageScore: searchResult.documents.reduce((sum, doc) => sum + ((doc as any)['@search.score'] || 0), 0) / searchResult.documents.length,
+        contextPreview: context.substring(0, 300) + '...'
+      });
+
       // Step 3: Create system prompt for RAG
+      const hasActualContent = documentsWithContent > 0;
       const systemPrompt = `You are a knowledgeable AI assistant helping with document analysis and information retrieval. You have access to a collection of documents and should provide accurate, helpful responses based on the available information.
 
 Guidelines:
 - Use the provided context to answer questions accurately
-- If information isn't available in the context, clearly state this
-- Cite specific sources when providing information
+- When document content is available, analyze it thoroughly to provide specific answers
+- If document content is not available but you have document metadata (title, author, type), use that information constructively
+- Cite specific sources when providing information (e.g., "According to [document title]...")
+- If information isn't available in any form, clearly state this and suggest what type of document might contain the answer
 - Provide comprehensive but concise responses
 - Focus on being helpful and informative
+
+Context Analysis:
+- Total documents found: ${searchResult.documents.length}
+- Documents with content: ${documentsWithContent}
+- Content availability: ${hasActualContent ? 'Good' : 'Limited - working with document metadata only'}
 
 Available context:
 ${context}`;
@@ -833,6 +944,38 @@ ${context}`;
 
   async getAvailableFilters() {
     return this.searchService.getAvailableFilters();
+  }
+
+  // Debug method to test search and content extraction
+  async debugSearch(query: string = '*'): Promise<{
+    searchResults: any[];
+    contentAnalysis: {
+      totalDocs: number;
+      docsWithContent: number;
+      sampleContent: string[];
+    };
+  }> {
+    const searchResult = await this.searchService.searchDocuments(query, undefined, 3);
+    
+    const contentAnalysis = {
+      totalDocs: searchResult.documents.length,
+      docsWithContent: searchResult.documents.filter(doc => doc.content && doc.content.trim()).length,
+      sampleContent: searchResult.documents.map(doc => 
+        doc.content ? doc.content.substring(0, 200) + '...' : 'NO CONTENT'
+      )
+    };
+
+    return {
+      searchResults: searchResult.documents.map(doc => ({
+        title: doc.title,
+        author: doc.author,
+        type: doc.type,
+        hasContent: !!doc.content,
+        contentLength: doc.content?.length || 0,
+        score: (doc as any)['@search.score']
+      })),
+      contentAnalysis
+    };
   }
 }
 
@@ -929,6 +1072,11 @@ const formatBytes = (bytes: number): string => {
 
 // Export error class
 export { AzureServiceError };
+
+// Debug function for testing search and content extraction
+export const debugRAGSearch = async (query: string = 'azure standup') => {
+  return await ragService.debugSearch(query);
+};
 
 // Debug function to check Azure configuration
 export const debugAzureConfig = () => {
