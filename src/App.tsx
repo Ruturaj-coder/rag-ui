@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Search, Send, Filter, X, Calendar, User, FileText, ChevronDown, Settings, Sparkles, Bot, Clock, TrendingUp, Database, Mic, MicOff, Copy, ThumbsUp, ThumbsDown, Share2, Download, Bookmark, MessageSquare, Brain, Zap, Shield, Globe, BarChart3, Eye, EyeOff, Moon, Sun, Palette, Volume2, VolumeX, AlertCircle, MapPin, Building, Star, Info } from 'lucide-react';
-import { ragService, AzureServiceError, debugAzureConfig, testAzureServices, type AzureSearchDocument, type SearchFilters, type SearchFacets } from './services/azureServices';
+import { ragService, AzureServiceError, debugAzureConfig, testAzureServices, type AzureSearchDocument, type SearchFilters, type SearchFacets, type FacetItem } from './services/apiService';
 
 // Type definitions
 interface Source {
@@ -752,14 +752,14 @@ const RAGChatbot = () => {
       }
       
       if (dateRange.start || dateRange.end) {
-        filters.dateRange = {
+        filters.date_range = {
           start: dateRange.start || undefined,
           end: dateRange.end || undefined
         };
       }
       
       if (selectedDocuments.length > 0) {
-        filters.documentIds = selectedDocuments;
+        filters.document_ids = selectedDocuments;
       }
 
       // Use Azure RAG service to process the query
@@ -773,25 +773,25 @@ const RAGChatbot = () => {
         }
       );
 
-      const botResponse: Message = {
-        id: messages.length + 2,
-        type: 'bot',
-        content: ragResult.response,
-        timestamp: new Date(),
-        sources: ragResult.sources.map(source => ({
-          name: source.name,
-          author: source.author,
-          relevance: source.relevance, // Raw Azure Search score
-          type: source.type,
-          category: source.category,
-          id: source.id // Azure Storage path
-        })),
-        confidence: ragResult.confidence,
-        tokens: ragResult.tokens,
-        processingTime: ragResult.processingTime,
-        model: ragResult.model,
-        temperature: temperature
-      };
+              const botResponse: Message = {
+          id: messages.length + 2,
+          type: 'bot',
+          content: ragResult.response,
+          timestamp: new Date(),
+          sources: ragResult.sources.map(source => ({
+            name: source.name,
+            author: source.author,
+            relevance: source.relevance, // Raw Azure Search score
+            type: source.type,
+            category: source.category,
+            id: source.id // Azure Storage path
+          })),
+          confidence: ragResult.confidence,
+          tokens: ragResult.tokens,
+          processingTime: ragResult.processing_time,
+          model: ragResult.model,
+          temperature: temperature
+        };
 
       setMessages(prev => [...prev, botResponse]);
 
