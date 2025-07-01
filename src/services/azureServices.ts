@@ -256,19 +256,96 @@ export class AzureSearchService {
     documentTypes: Array<{ name: string; count: number }>;
   }> {
     try {
-      // Use facets to get available filter options
+      console.log('🔍 Starting getAvailableFilters...');
+      console.log('🔧 Azure Search Config:', {
+        endpoint: this.baseUrl,
+        indexName: this.indexName,
+        hasApiKey: !!this.apiKey
+      });
+
+      // First, let's try a simple search without facets to test basic connectivity
+      const testParams = new URLSearchParams({
+        'api-version': '2023-11-01',
+        search: '*',
+        '$top': '1'
+      });
+
+      const testUrl = `${this.baseUrl}/indexes/${this.indexName}/docs?${testParams.toString()}`;
+      console.log('🧪 Testing basic search:', testUrl);
+
+      const testResponse = await fetch(testUrl, {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+          'api-key': this.apiKey
+        }
+      });
+
+      if (!testResponse.ok) {
+        const errorText = await testResponse.text();
+        console.error('❌ Basic search failed:', {
+          status: testResponse.status,
+          statusText: testResponse.statusText,
+          errorText
+        });
+        throw new AzureServiceError(
+          `Basic search failed: ${testResponse.status} ${testResponse.statusText} - ${errorText}`,
+          'search',
+          testResponse.status
+        );
+      }
+
+      const testResult = await testResponse.json();
+      console.log('✅ Basic search successful');
+      
+      // Log available fields from the first document
+      if (testResult.value && testResult.value.length > 0) {
+        const firstDoc = testResult.value[0];
+        const availableFields = Object.keys(firstDoc).filter(key => !key.startsWith('@'));
+        console.log('📋 Available fields in index:', availableFields);
+        
+        // Check for common author fields
+        const possibleAuthorFields = availableFields.filter(field => 
+          field.toLowerCase().includes('author') || 
+          field.toLowerCase().includes('creator') ||
+          field.toLowerCase().includes('writer')
+        );
+        console.log('👤 Possible author fields:', possibleAuthorFields);
+        
+        // Check for common type/category fields
+        const possibleTypeFields = availableFields.filter(field => 
+          field.toLowerCase().includes('type') || 
+          field.toLowerCase().includes('category') ||
+          field.toLowerCase().includes('content_type') ||
+          field.toLowerCase().includes('extension')
+        );
+        console.log('📂 Possible type/category fields:', possibleTypeFields);
+      }
+
+      // Now try facets with the standard field names
       const searchParams = new URLSearchParams({
         'api-version': '2023-11-01',
         search: '*',
         '$top': '0'
       });
       
-      // Add facet parameters separately since they can have multiple values
-      searchParams.append('facet', 'metadata_author,count:50');
-      searchParams.append('facet', 'metadata_storage_content_type,count:50');
-      searchParams.append('facet', 'metadata_storage_file_extension,count:20');
+      // Add facet parameters - try common field variations
+      const facetFields = [
+        'metadata_author',
+        'author', 
+        'metadata_storage_content_type',
+        'content_type',
+        'type',
+        'metadata_storage_file_extension',
+        'file_extension',
+        'extension'
+      ];
+
+      // First try with just one facet to see which works
+      searchParams.append('facet', 'metadata_author,count:10');
 
       const url = `${this.baseUrl}/indexes/${this.indexName}/docs?${searchParams.toString()}`;
+      console.log('🎯 Trying facets request:', url);
 
       const response = await fetch(url, {
         method: 'GET',
@@ -279,38 +356,56 @@ export class AzureSearchService {
       });
 
       if (!response.ok) {
-        throw new AzureServiceError(
-          `Facets request failed: ${response.statusText}`,
-          'search',
-          response.status
-        );
+        const errorText = await response.text();
+        console.error('❌ Facets request failed:', {
+          status: response.status,
+          statusText: response.statusText,
+          errorText,
+          url
+        });
+        
+        // Return empty results instead of throwing error
+        console.log('🔄 Falling back to empty filters due to facets error');
+        return {
+          authors: [],
+          categories: [],
+          documentTypes: []
+        };
       }
 
       const result = await response.json();
+      console.log('✅ Facets response received:', result);
       const facets = result['@search.facets'] || {};
+      console.log('📊 Available facets:', Object.keys(facets));
 
       return {
         authors: (facets.metadata_author || []).map((facet: any) => ({
-          name: facet.value,
-          count: facet.count
+          name: facet.value || 'Unknown',
+          count: facet.count || 0
         })),
         categories: (facets.metadata_storage_content_type || []).map((facet: any) => ({
-          name: facet.value,
-          count: facet.count
+          name: facet.value || 'Unknown',
+          count: facet.count || 0
         })),
         documentTypes: (facets.metadata_storage_file_extension || []).map((facet: any) => ({
-          name: facet.value,
-          count: facet.count
+          name: facet.value || 'Unknown',
+          count: facet.count || 0
         }))
       };
     } catch (error) {
+      console.error('💥 getAvailableFilters error:', error);
+      
       if (error instanceof AzureServiceError) {
         throw error;
       }
-      throw new AzureServiceError(
-        `Facets retrieval error: ${error instanceof Error ? error.message : 'Unknown error'}`,
-        'search'
-      );
+      
+      // For now, return empty results instead of crashing
+      console.log('🔄 Returning empty filters due to error');
+      return {
+        authors: [],
+        categories: [],
+        documentTypes: []
+      };
     }
   }
 }
@@ -613,4 +708,39 @@ const formatBytes = (bytes: number): string => {
 };
 
 // Export error class
-export { AzureServiceError }; 
+export { AzureServiceError };
+
+// Debug function to check Azure configuration
+export const debugAzureConfig = () => {
+  console.log('🔧 Azure Configuration Check:');
+  console.log('OpenAI:', {
+    endpoint: azureConfig.openai.endpoint ? '✅ Set' : '❌ Missing',
+    apiKey: azureConfig.openai.apiKey ? '✅ Set' : '❌ Missing',
+    deploymentName: azureConfig.openai.deploymentName,
+    apiVersion: azureConfig.openai.apiVersion
+  });
+  console.log('Search:', {
+    endpoint: azureConfig.search.endpoint ? '✅ Set' : '❌ Missing',
+    apiKey: azureConfig.search.apiKey ? '✅ Set' : '❌ Missing',
+    indexName: azureConfig.search.indexName
+  });
+  console.log('Storage:', {
+    accountName: azureConfig.storage?.accountName ? '✅ Set' : '❌ Missing',
+    containerName: azureConfig.storage?.containerName || 'documents',
+    accountKey: azureConfig.storage?.accountKey ? '✅ Set' : '❌ Missing'
+  });
+  
+  // Check environment variables directly
+  console.log('🌍 Environment Variables:');
+  console.log({
+    VITE_AZURE_OPENAI_ENDPOINT: import.meta.env.VITE_AZURE_OPENAI_ENDPOINT ? '✅ Set' : '❌ Missing',
+    VITE_AZURE_OPENAI_API_KEY: import.meta.env.VITE_AZURE_OPENAI_API_KEY ? '✅ Set' : '❌ Missing',
+    VITE_AZURE_SEARCH_ENDPOINT: import.meta.env.VITE_AZURE_SEARCH_ENDPOINT ? '✅ Set' : '❌ Missing',
+    VITE_AZURE_SEARCH_API_KEY: import.meta.env.VITE_AZURE_SEARCH_API_KEY ? '✅ Set' : '❌ Missing',
+    VITE_AZURE_SEARCH_INDEX_NAME: import.meta.env.VITE_AZURE_SEARCH_INDEX_NAME ? '✅ Set' : '❌ Missing',
+    VITE_AZURE_STORAGE_ACCOUNT_NAME: import.meta.env.VITE_AZURE_STORAGE_ACCOUNT_NAME ? '✅ Set' : '❌ Missing',
+    VITE_AZURE_STORAGE_CONTAINER_NAME: import.meta.env.VITE_AZURE_STORAGE_CONTAINER_NAME ? '✅ Set' : '❌ Missing'
+  });
+  
+  return azureConfig;
+}; 

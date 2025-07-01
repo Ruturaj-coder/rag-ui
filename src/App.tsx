@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Search, Send, Filter, X, Calendar, User, FileText, ChevronDown, Settings, Sparkles, Bot, Clock, TrendingUp, Database, Mic, MicOff, Copy, ThumbsUp, ThumbsDown, Share2, Download, Bookmark, MessageSquare, Brain, Zap, Shield, Globe, BarChart3, Eye, EyeOff, Moon, Sun, Palette, Volume2, VolumeX, AlertCircle, MapPin, Building, Star, Info } from 'lucide-react';
-import { ragService, AzureServiceError, type AzureSearchDocument } from './services/azureServices';
+import { ragService, AzureServiceError, debugAzureConfig, type AzureSearchDocument } from './services/azureServices';
 
 // Type definitions
 interface Source {
@@ -638,6 +638,10 @@ const RAGChatbot = () => {
       try {
         setIsLoadingFilters(true);
         setError(null);
+        
+        // Debug Azure configuration first
+        console.log('🚀 Starting Azure data load...');
+        debugAzureConfig();
         
         // Load available filters from Azure Search
         const filters = await ragService.getAvailableFilters();
