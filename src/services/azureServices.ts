@@ -1,4 +1,5 @@
-// Azure Services Integration
+// Azure Services - Simple Implementation
+
 interface AzureConfig {
   openai: {
     endpoint: string;
@@ -11,14 +12,8 @@ interface AzureConfig {
     apiKey: string;
     indexName: string;
   };
-  storage?: {
-    accountName: string;
-    containerName: string;
-    accountKey?: string;
-  };
 }
 
-// Configuration from environment variables
 const azureConfig: AzureConfig = {
   openai: {
     endpoint: import.meta.env.VITE_AZURE_OPENAI_ENDPOINT || '',
@@ -30,15 +25,9 @@ const azureConfig: AzureConfig = {
     endpoint: import.meta.env.VITE_AZURE_SEARCH_ENDPOINT || '',
     apiKey: import.meta.env.VITE_AZURE_SEARCH_API_KEY || '',
     indexName: import.meta.env.VITE_AZURE_SEARCH_INDEX_NAME || 'documents'
-  },
-  storage: {
-    accountName: import.meta.env.VITE_AZURE_STORAGE_ACCOUNT_NAME || '',
-    containerName: import.meta.env.VITE_AZURE_STORAGE_CONTAINER_NAME || 'documents',
-    accountKey: import.meta.env.VITE_AZURE_STORAGE_ACCOUNT_KEY || ''
   }
 };
 
-// Types for Azure responses
 export interface AzureSearchDocument {
   id: string;
   content: string;
@@ -53,37 +42,11 @@ export interface AzureSearchDocument {
   metadata?: Record<string, any>;
 }
 
-export interface AzureSearchResult {
-  value: Array<{
-    '@search.score': number;
-    '@search.highlights'?: Record<string, string[]>;
-  } & AzureSearchDocument>;
-  '@odata.count'?: number;
-}
-
 export interface AzureOpenAIMessage {
   role: 'system' | 'user' | 'assistant';
   content: string;
 }
 
-export interface AzureOpenAIResponse {
-  id: string;
-  object: string;
-  created: number;
-  model: string;
-  choices: Array<{
-    index: number;
-    message: AzureOpenAIMessage;
-    finish_reason: string;
-  }>;
-  usage: {
-    prompt_tokens: number;
-    completion_tokens: number;
-    total_tokens: number;
-  };
-}
-
-// Error handling
 class AzureServiceError extends Error {
   constructor(message: string, public service: string, public statusCode?: number) {
     super(message);
@@ -91,7 +54,6 @@ class AzureServiceError extends Error {
   }
 }
 
-// Azure AI Search Service
 export class AzureSearchService {
   private baseUrl: string;
   private apiKey: string;
@@ -107,229 +69,114 @@ export class AzureSearchService {
     }
   }
 
-  private fieldMapping: {
-    author?: string;
-    contentType?: string;
-    extension?: string;
-    title?: string;
-    lastModified?: string;
-    size?: string;
-    name?: string;
-    content?: string;
-    searchableContent?: string[];
-  } = {};
-
-  private async discoverFieldMapping(): Promise<void> {
-    if (Object.keys(this.fieldMapping).length > 0) {
-      return; // Already discovered
-    }
-
+  async searchDocuments(query: string, top: number = 5): Promise<{ documents: AzureSearchDocument[]; totalCount: number }> {
     try {
-      // Get a sample document to discover field names
-      const testParams = new URLSearchParams({
-        'api-version': '2023-11-01',
-        search: '*',
-        '$top': '1'
-      });
+      const url = `${this.baseUrl}/indexes/${this.indexName}/docs/search?api-version=2023-11-01`;
+      
+      const requestBody = {
+        search: query,
+        top: top,
+        count: true,
+        select: "*",
+        searchMode: "all"
+      };
 
-      const testUrl = `${this.baseUrl}/indexes/${this.indexName}/docs?${testParams.toString()}`;
-      const testResponse = await fetch(testUrl, {
-        method: 'GET',
+      const response = await fetch(url, {
+        method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'api-key': this.apiKey
-        }
+        },
+        body: JSON.stringify(requestBody)
       });
 
-      if (testResponse.ok) {
-        const testResult = await testResponse.json();
-        if (testResult.value && testResult.value.length > 0) {
-          const firstDoc = testResult.value[0];
-          const availableFields = Object.keys(firstDoc).filter(key => !key.startsWith('@'));
-          
-          // Map common fields
-          this.fieldMapping.author = availableFields.find(f => 
-            f.toLowerCase().includes('author') || f.toLowerCase().includes('creator') || f.toLowerCase().includes('writer') || f.toLowerCase().includes('by')
-          );
-          
-          this.fieldMapping.contentType = availableFields.find(f => 
-            f.toLowerCase().includes('type') || f.toLowerCase().includes('category') || f.toLowerCase().includes('content_type') || f.toLowerCase().includes('mime')
-          );
-          
-          this.fieldMapping.extension = availableFields.find(f => 
-            f.toLowerCase().includes('extension') || f.toLowerCase().includes('ext') || f.toLowerCase().includes('format')
-          );
-          
-          this.fieldMapping.title = availableFields.find(f => 
-            f.toLowerCase().includes('title') || f.toLowerCase().includes('name')
-          ) || availableFields.find(f => f.toLowerCase().includes('title'));
-          
-          this.fieldMapping.lastModified = availableFields.find(f => 
-            f.toLowerCase().includes('modified') || f.toLowerCase().includes('updated') || f.toLowerCase().includes('date')
-          );
-          
-          this.fieldMapping.size = availableFields.find(f => 
-            f.toLowerCase().includes('size') || f.toLowerCase().includes('length')
-          );
-          
-          this.fieldMapping.name = availableFields.find(f => 
-            f.toLowerCase().includes('name') && !f.toLowerCase().includes('filename')
-          );
-
-          // Find content fields - prioritize actual content over metadata
-          this.fieldMapping.content = availableFields.find(f => 
-            f.toLowerCase() === 'content' || 
-            f.toLowerCase() === 'text' || 
-            f.toLowerCase() === 'body' ||
-            f.toLowerCase() === 'description'
-          );
-
-          // Find all possible searchable content fields
-          this.fieldMapping.searchableContent = availableFields.filter(f => 
-            f.toLowerCase().includes('content') || 
-            f.toLowerCase().includes('text') || 
-            f.toLowerCase().includes('body') ||
-            f.toLowerCase().includes('description') ||
-            f.toLowerCase().includes('summary') ||
-            f.toLowerCase().includes('abstract')
-          );
-
-          console.log('🗂️ Field mapping discovered:', {
-            ...this.fieldMapping,
-            availableContentFields: this.fieldMapping.searchableContent,
-            primaryContentField: this.fieldMapping.content
-          });
-        }
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error('❌ Search failed:', errorText);
+        throw new AzureServiceError(`Search failed: ${response.statusText}`, 'search', response.status);
       }
+
+      const result = await response.json();
+      const documents = result.value || [];
+
+      console.log(`✅ Found ${documents.length} documents for query: "${query}"`);
+      
+      // First document debugging - see what fields are available
+      if (documents.length > 0) {
+        const firstDoc = documents[0];
+        console.log('📋 Available fields in first document:', Object.keys(firstDoc));
+        console.log('🔍 First document sample:', {
+          id: firstDoc.id,
+          metadata_storage_path: firstDoc.metadata_storage_path,
+          content: firstDoc.content ? `${firstDoc.content.substring(0, 100)}...` : 'NO CONTENT FIELD',
+          text: firstDoc.text ? `${firstDoc.text.substring(0, 100)}...` : 'NO TEXT FIELD',
+          merged_content: firstDoc.merged_content ? `${firstDoc.merged_content.substring(0, 100)}...` : 'NO MERGED_CONTENT FIELD'
+        });
+      }
+
+      return {
+        documents: documents.map((doc: any) => this.mapDocument(doc)),
+        totalCount: result['@odata.count'] || documents.length
+      };
     } catch (error) {
-      console.log('⚠️ Could not discover field mapping:', error);
+      console.error('💥 Search error:', error);
+      if (error instanceof AzureServiceError) throw error;
+      throw new AzureServiceError(`Search error: ${error instanceof Error ? error.message : 'Unknown error'}`, 'search');
     }
   }
 
-  private mapAzureDocumentToFrontend(azureDoc: any): AzureSearchDocument & { '@search.score'?: number } {
-    // Determine the best title for the document
-    let title = 'Untitled Document';
+  private mapDocument(azureDoc: any): AzureSearchDocument {
+    // Extract title
+    let title = azureDoc.title || azureDoc.metadata_title || 'Untitled Document';
     
-    const titleField = this.fieldMapping.title;
-    if (titleField && azureDoc[titleField] && azureDoc[titleField].trim()) {
-      title = azureDoc[titleField].trim();
-    } else if (azureDoc.metadata_storage_path) {
-      // Extract filename from storage path
-      const pathParts = azureDoc.metadata_storage_path.split('/');
-      let filename = pathParts[pathParts.length - 1];
-      
+    if (!title || title === 'Untitled Document') {
+      const path = azureDoc.metadata_storage_path || azureDoc.id || '';
+      const filename = path.split('/').pop() || '';
       if (filename) {
-        // Decode URL encoding (handles spaces like %20)
-        try {
-          filename = decodeURIComponent(filename);
-        } catch (e) {
-          // If decoding fails, use as-is
-        }
-        
-        // Remove file extension for cleaner display
-        const lastDotIndex = filename.lastIndexOf('.');
-        if (lastDotIndex > 0) {
-          title = filename.substring(0, lastDotIndex);
-        } else {
-          title = filename;
-        }
-        
-        // Clean up the title (replace underscores, handle camelCase, etc.)
-        title = title
-          .replace(/[_-]/g, ' ')  // Replace underscores and dashes with spaces
-          .replace(/([a-z])([A-Z])/g, '$1 $2')  // Add space between camelCase
-          .replace(/\s+/g, ' ')  // Normalize multiple spaces
-          .trim();
-        
-        // Capitalize first letter of each word
-        title = title.replace(/\b\w/g, l => l.toUpperCase());
+        title = decodeURIComponent(filename).replace(/\.[^/.]+$/, "").replace(/[_-]/g, ' ');
       }
     }
 
-    // Extract content from the best available field
+    // Extract content - try multiple field names
     let content = '';
+    const contentFields = [
+      'content', 'merged_content', 'text', 'body', 'description', 
+      'summary', 'extractedText', 'textContent', 'people', 'organizations', 'locations'
+    ];
     
-    // Try the mapped content field first
-    if (this.fieldMapping.content && azureDoc[this.fieldMapping.content]) {
-      content = azureDoc[this.fieldMapping.content];
-    } 
-    // Fallback to any available content fields
-    else if (this.fieldMapping.searchableContent) {
-      for (const contentField of this.fieldMapping.searchableContent) {
-        if (azureDoc[contentField] && azureDoc[contentField].trim()) {
-          content = azureDoc[contentField];
+    for (const field of contentFields) {
+      if (azureDoc[field]) {
+        if (typeof azureDoc[field] === 'string' && azureDoc[field].trim()) {
+          content = azureDoc[field].trim();
+          console.log(`✅ Found content in field: ${field} (${content.length} chars)`);
+          break;
+        }
+        // Handle array fields (some indexes store content as arrays)
+        else if (Array.isArray(azureDoc[field]) && azureDoc[field].length > 0) {
+          content = azureDoc[field].join(' ').trim();
+          console.log(`✅ Found content in array field: ${field} (${content.length} chars)`);
           break;
         }
       }
     }
-    // Last resort - try common field names
-    else {
-      content = azureDoc.content || 
-                azureDoc.text || 
-                azureDoc.body || 
-                azureDoc.description || 
-                azureDoc.summary || 
-                '';
+
+    if (!content) {
+      console.log('⚠️ No content found in any field for document:', title);
     }
 
-    // Use discovered field names or fallback to standard names
-    const authorField = this.fieldMapping.author || 'metadata_author';
-    const contentTypeField = this.fieldMapping.contentType || 'metadata_storage_content_type';
-    const extensionField = this.fieldMapping.extension || 'metadata_storage_file_extension';
-    const lastModifiedField = this.fieldMapping.lastModified || 'metadata_storage_last_modified';
-    const sizeField = this.fieldMapping.size || 'metadata_storage_size';
-
-    const mapped = {
+    return {
       id: azureDoc.metadata_storage_path || azureDoc.id || '',
       title,
-      content: content, // Use the properly extracted content
-      author: azureDoc[authorField] || 'Unknown Author',
-      category: azureDoc[contentTypeField] || 'Unknown Type',
-      type: azureDoc[extensionField]?.replace('.', '').toUpperCase() || 'Document',
-      date: azureDoc[lastModifiedField] || azureDoc.metadata_creation_date || new Date().toISOString(),
-      size: azureDoc[sizeField] ? this.formatBytes(azureDoc[sizeField]) : undefined,
-      status: 'active', // Default status
-      downloads: 0, // Not available in metadata
-      metadata: {
-        content_type: azureDoc.metadata_content_type,
-        language: azureDoc.metadata_language,
-        file_extension: azureDoc[extensionField],
-        content_md5: azureDoc.metadata_storage_content_md5
-      },
-      '@search.score': azureDoc['@search.score'] // Preserve search score
+      content,
+      author: azureDoc.author || azureDoc.metadata_author || 'Unknown',
+      category: azureDoc.category || azureDoc.metadata_storage_content_type || 'Document',
+      type: azureDoc.metadata_storage_file_extension?.replace('.', '').toUpperCase() || 'FILE',
+      date: azureDoc.metadata_storage_last_modified || new Date().toISOString(),
+      size: azureDoc.metadata_storage_size ? this.formatBytes(azureDoc.metadata_storage_size) : undefined,
+      status: 'active',
+      downloads: 0,
+      metadata: azureDoc
     };
-
-    // Debug logging for title mapping and content extraction
-    const contentFieldUsed = this.fieldMapping.content && azureDoc[this.fieldMapping.content] ? 
-      this.fieldMapping.content : 
-      (this.fieldMapping.searchableContent?.find(f => azureDoc[f] && azureDoc[f].trim()) || 'none');
-
-    console.log('📄 Document mapping:', {
-      originalPath: azureDoc.metadata_storage_path,
-      originalTitle: titleField ? azureDoc[titleField] : undefined,
-      extractedTitle: title,
-      contentInfo: {
-        fieldUsed: contentFieldUsed,
-        contentLength: content ? content.length : 0,
-        hasContent: !!content,
-        contentPreview: content ? content.substring(0, 100) + '...' : 'NO CONTENT'
-      },
-      usedFields: {
-        author: { field: authorField, value: azureDoc[authorField] },
-        contentType: { field: contentTypeField, value: azureDoc[contentTypeField] },
-        extension: { field: extensionField, value: azureDoc[extensionField] }
-      },
-      finalMapped: {
-        id: mapped.id,
-        title: mapped.title,
-        author: mapped.author,
-        type: mapped.type,
-        category: mapped.category,
-        hasContent: !!mapped.content
-      }
-    });
-
-    return mapped;
   }
 
   private formatBytes(bytes: number): string {
@@ -340,168 +187,13 @@ export class AzureSearchService {
     return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
   }
 
-  async searchDocuments(
-    query: string,
-    filters?: {
-      authors?: string[];
-      categories?: string[];
-      dateRange?: { start?: string; end?: string };
-      documentIds?: string[];
-    },
-    top: number = 10
-  ): Promise<{ documents: AzureSearchDocument[]; totalCount: number }> {
-    try {
-      // Discover field mapping if not done yet
-      await this.discoverFieldMapping();
-
-      // Build search parameters - remove highlight if content field doesn't exist
-      const searchParams = new URLSearchParams({
-        'api-version': '2023-11-01',
-        search: query || '*',
-        '$top': top.toString(),
-        '$count': 'true',
-        'searchMode': 'all', // Changed from 'any' to 'all' for better relevance
-        'queryType': 'simple',
-        'select': '*' // Select all fields initially, we'll map them in the response
-      });
-
-      // Only add highlight if we have actual content fields
-      const highlightFields = [];
-      if (this.fieldMapping.content) {
-        highlightFields.push(this.fieldMapping.content);
-      }
-      if (this.fieldMapping.title) {
-        highlightFields.push(this.fieldMapping.title);
-      }
-      if (this.fieldMapping.searchableContent && this.fieldMapping.searchableContent.length > 0) {
-        highlightFields.push(...this.fieldMapping.searchableContent.slice(0, 3)); // Limit to first 3
-      }
-      
-      if (highlightFields.length > 0) {
-        // Remove duplicates and join
-        const uniqueFields = [...new Set(highlightFields)];
-        searchParams.append('highlight', uniqueFields.join(','));
-      }
-
-      // Build filter string using discovered field names
-      const filterConditions = [];
-      
-      if (filters?.authors && filters.authors.length > 0 && this.fieldMapping.author) {
-        const authorFilter = filters.authors.map(author => `${this.fieldMapping.author} eq '${author.replace(/'/g, "''")}'`).join(' or ');
-        filterConditions.push(`(${authorFilter})`);
-      }
-
-      if (filters?.categories && filters.categories.length > 0 && this.fieldMapping.contentType) {
-        const categoryFilter = filters.categories.map(cat => `${this.fieldMapping.contentType} eq '${cat.replace(/'/g, "''")}'`).join(' or ');
-        filterConditions.push(`(${categoryFilter})`);
-      }
-
-      if (filters?.documentIds && filters.documentIds.length > 0) {
-        const idFilter = filters.documentIds.map(id => `metadata_storage_path eq '${id.replace(/'/g, "''")}'`).join(' or ');
-        filterConditions.push(`(${idFilter})`);
-      }
-
-      if (filters?.dateRange?.start && this.fieldMapping.lastModified) {
-        filterConditions.push(`${this.fieldMapping.lastModified} ge ${filters.dateRange.start}T00:00:00Z`);
-      }
-
-      if (filters?.dateRange?.end && this.fieldMapping.lastModified) {
-        filterConditions.push(`${this.fieldMapping.lastModified} le ${filters.dateRange.end}T23:59:59Z`);
-      }
-
-      if (filterConditions.length > 0) {
-        searchParams.append('$filter', filterConditions.join(' and '));
-      }
-
-      const url = `${this.baseUrl}/indexes/${this.indexName}/docs?${searchParams.toString()}`;
-
-      const response = await fetch(url, {
-        method: 'GET',
-        headers: {
-          'Content-Type': 'application/json',
-          'api-key': this.apiKey
-        }
-      });
-
-      if (!response.ok) {
-        throw new AzureServiceError(
-          `Search request failed: ${response.statusText}`,
-          'search',
-          response.status
-        );
-      }
-
-      const result: AzureSearchResult = await response.json();
-      
-      // Add debugging for the first few results
-      if (result.value && result.value.length > 0) {
-        console.log('🔍 Azure Search Results (first 3):', result.value.slice(0, 3).map(doc => {
-          const rawDoc = doc as any;
-          return {
-            // All metadata fields for debugging
-            metadata_storage_path: rawDoc.metadata_storage_path,
-            metadata_title: rawDoc.metadata_title,
-            metadata_author: rawDoc.metadata_author,
-            metadata_storage_content_type: rawDoc.metadata_storage_content_type,
-            metadata_storage_file_extension: rawDoc.metadata_storage_file_extension,
-            metadata_storage_size: rawDoc.metadata_storage_size,
-            content: rawDoc.content ? rawDoc.content.substring(0, 100) + '...' : 'No content',
-            '@search.score': rawDoc['@search.score'],
-            // Show ALL available fields
-            allFields: Object.keys(rawDoc).filter(key => !['content', '@search.score', '@search.highlights'].includes(key))
-          };
-        }));
-      }
-      
-      return {
-        documents: (result.value || []).map(doc => this.mapAzureDocumentToFrontend(doc)),
-        totalCount: result['@odata.count'] || 0
-      };
-    } catch (error) {
-      if (error instanceof AzureServiceError) {
-        throw error;
-      }
-      throw new AzureServiceError(
-        `Search service error: ${error instanceof Error ? error.message : 'Unknown error'}`,
-        'search'
-      );
-    }
-  }
-
   async getDocumentById(id: string): Promise<AzureSearchDocument | null> {
     try {
-      const url = `${this.baseUrl}/indexes/${this.indexName}/docs('${encodeURIComponent(id)}')?api-version=2023-11-01`;
-
-      const response = await fetch(url, {
-        method: 'GET',
-        headers: {
-          'Content-Type': 'application/json',
-          'api-key': this.apiKey
-        }
-      });
-
-      if (response.status === 404) {
-        return null;
-      }
-
-      if (!response.ok) {
-        throw new AzureServiceError(
-          `Document retrieval failed: ${response.statusText}`,
-          'search',
-          response.status
-        );
-      }
-
-      const azureDoc = await response.json();
-      return this.mapAzureDocumentToFrontend(azureDoc);
+      const result = await this.searchDocuments(`metadata_storage_path:"${id}"`, 1);
+      return result.documents.length > 0 ? result.documents[0] : null;
     } catch (error) {
-      if (error instanceof AzureServiceError) {
-        throw error;
-      }
-      throw new AzureServiceError(
-        `Document retrieval error: ${error instanceof Error ? error.message : 'Unknown error'}`,
-        'search'
-      );
+      console.error('Error getting document by ID:', error);
+      return null;
     }
   }
 
@@ -510,207 +202,14 @@ export class AzureSearchService {
     categories: Array<{ name: string; count: number }>;
     documentTypes: Array<{ name: string; count: number }>;
   }> {
-    try {
-      console.log('🔍 Starting getAvailableFilters...');
-      console.log('🔧 Azure Search Config:', {
-        endpoint: this.baseUrl,
-        indexName: this.indexName,
-        hasApiKey: !!this.apiKey
-      });
-
-      // First, let's try a simple search without facets to test basic connectivity
-      const testParams = new URLSearchParams({
-        'api-version': '2023-11-01',
-        search: '*',
-        '$top': '1'
-      });
-
-      const testUrl = `${this.baseUrl}/indexes/${this.indexName}/docs?${testParams.toString()}`;
-      console.log('🧪 Testing basic search:', testUrl);
-
-      const testResponse = await fetch(testUrl, {
-        method: 'GET',
-        headers: {
-          'Content-Type': 'application/json',
-          'api-key': this.apiKey
-        }
-      });
-
-      if (!testResponse.ok) {
-        const errorText = await testResponse.text();
-        console.error('❌ Basic search failed:', {
-          status: testResponse.status,
-          statusText: testResponse.statusText,
-          errorText
-        });
-        throw new AzureServiceError(
-          `Basic search failed: ${testResponse.status} ${testResponse.statusText} - ${errorText}`,
-          'search',
-          testResponse.status
-        );
-      }
-
-      const testResult = await testResponse.json();
-      console.log('✅ Basic search successful');
-      
-      // Log available fields from the first document
-      if (testResult.value && testResult.value.length > 0) {
-        const firstDoc = testResult.value[0];
-        const availableFields = Object.keys(firstDoc).filter(key => !key.startsWith('@'));
-        console.log('📋 Available fields in index:', availableFields);
-        
-        // Check for common author fields
-        const possibleAuthorFields = availableFields.filter(field => 
-          field.toLowerCase().includes('author') || 
-          field.toLowerCase().includes('creator') ||
-          field.toLowerCase().includes('writer')
-        );
-        console.log('👤 Possible author fields:', possibleAuthorFields);
-        
-        // Check for common type/category fields
-        const possibleTypeFields = availableFields.filter(field => 
-          field.toLowerCase().includes('type') || 
-          field.toLowerCase().includes('category') ||
-          field.toLowerCase().includes('content_type') ||
-          field.toLowerCase().includes('extension')
-        );
-        console.log('📂 Possible type/category fields:', possibleTypeFields);
-      }
-
-      // Now discover what facetable fields actually exist and try those
-      let authorField = null;
-      let contentTypeField = null;
-      let extensionField = null;
-
-      if (testResult.value && testResult.value.length > 0) {
-        const firstDoc = testResult.value[0];
-        const availableFields = Object.keys(firstDoc).filter(key => !key.startsWith('@'));
-        
-        // Find the best author field
-        const possibleAuthorFields = availableFields.filter(field => 
-          field.toLowerCase().includes('author') || 
-          field.toLowerCase().includes('creator') ||
-          field.toLowerCase().includes('writer') ||
-          field.toLowerCase().includes('by')
-        );
-        authorField = possibleAuthorFields[0] || null;
-        
-        // Find the best content type field
-        const possibleTypeFields = availableFields.filter(field => 
-          field.toLowerCase().includes('type') || 
-          field.toLowerCase().includes('category') ||
-          field.toLowerCase().includes('content_type') ||
-          field.toLowerCase().includes('mime')
-        );
-        contentTypeField = possibleTypeFields[0] || null;
-        
-        // Find the best extension field
-        const possibleExtensionFields = availableFields.filter(field => 
-          field.toLowerCase().includes('extension') ||
-          field.toLowerCase().includes('ext') ||
-          field.toLowerCase().includes('format')
-        );
-        extensionField = possibleExtensionFields[0] || null;
-
-        console.log('🔍 Field mapping discovered:', {
-          authorField,
-          contentTypeField,
-          extensionField,
-          availableFields: availableFields.slice(0, 10) // Show first 10 fields
-        });
-      }
-
-      // Try to get facets for the fields we found
-      const results = {
-        authors: [] as Array<{ name: string; count: number }>,
-        categories: [] as Array<{ name: string; count: number }>,
-        documentTypes: [] as Array<{ name: string; count: number }>
-      };
-
-      // Try each facet separately to see which ones work
-      const facetAttempts = [
-        { field: authorField, type: 'authors' },
-        { field: contentTypeField, type: 'categories' },
-        { field: extensionField, type: 'documentTypes' }
-      ];
-
-      for (const attempt of facetAttempts) {
-        if (!attempt.field) {
-          console.log(`⚠️ No suitable field found for ${attempt.type}`);
-          continue;
-        }
-
-        try {
-          const facetParams = new URLSearchParams({
-            'api-version': '2023-11-01',
-            search: '*',
-            '$top': '0'
-          });
-          
-          facetParams.append('facet', `${attempt.field},count:50`);
-          
-          const facetUrl = `${this.baseUrl}/indexes/${this.indexName}/docs?${facetParams.toString()}`;
-          console.log(`🎯 Trying facet for ${attempt.type} using field: ${attempt.field}`);
-
-          const facetResponse = await fetch(facetUrl, {
-            method: 'GET',
-            headers: {
-              'Content-Type': 'application/json',
-              'api-key': this.apiKey
-            }
-          });
-
-          if (facetResponse.ok) {
-            const facetResult = await facetResponse.json();
-            const facets = facetResult['@search.facets'] || {};
-            
-            if (facets[attempt.field]) {
-              const facetData = facets[attempt.field].map((facet: any) => ({
-                name: facet.value || 'Unknown',
-                count: facet.count || 0
-              }));
-              
-              if (attempt.type === 'authors') results.authors = facetData;
-              else if (attempt.type === 'categories') results.categories = facetData;
-              else if (attempt.type === 'documentTypes') results.documentTypes = facetData;
-              
-              console.log(`✅ Successfully got ${attempt.type} facets:`, facetData.slice(0, 3));
-            }
-          } else {
-            const errorText = await facetResponse.text();
-            console.log(`❌ Facet failed for ${attempt.field}:`, errorText);
-          }
-        } catch (error) {
-          console.log(`💥 Error trying facet for ${attempt.field}:`, error);
-        }
-      }
-
-      console.log('📊 Final facet results:', {
-        authors: results.authors.length,
-        categories: results.categories.length,
-        documentTypes: results.documentTypes.length
-      });
-
-      return results;
-    } catch (error) {
-      console.error('💥 getAvailableFilters error:', error);
-      
-      if (error instanceof AzureServiceError) {
-        throw error;
-      }
-      
-      // For now, return empty results instead of crashing
-      console.log('🔄 Returning empty filters due to error');
-      return {
-        authors: [],
-        categories: [],
-        documentTypes: []
-      };
-    }
+    return {
+      authors: [],
+      categories: [],
+      documentTypes: []
+    };
   }
 }
 
-// Azure OpenAI Service
 export class AzureOpenAIService {
   private baseUrl: string;
   private apiKey: string;
@@ -733,7 +232,6 @@ export class AzureOpenAIService {
     options: {
       temperature?: number;
       maxTokens?: number;
-      model?: string;
     } = {}
   ): Promise<{
     content: string;
@@ -744,59 +242,39 @@ export class AzureOpenAIService {
     try {
       const url = `${this.baseUrl}/openai/deployments/${this.deploymentName}/chat/completions?api-version=${this.apiVersion}`;
 
-      const requestBody = {
-        messages,
-        temperature: options.temperature ?? 0.7,
-        max_tokens: options.maxTokens ?? 2000,
-        top_p: 1.0,
-        frequency_penalty: 0,
-        presence_penalty: 0,
-        stream: false
-      };
-
       const response = await fetch(url, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'api-key': this.apiKey
         },
-        body: JSON.stringify(requestBody)
+        body: JSON.stringify({
+          messages,
+          temperature: options.temperature ?? 0.7,
+          max_tokens: options.maxTokens ?? 2000
+        })
       });
 
       if (!response.ok) {
         const errorText = await response.text();
-        throw new AzureServiceError(
-          `OpenAI request failed: ${response.statusText} - ${errorText}`,
-          'openai',
-          response.status
-        );
+        throw new AzureServiceError(`OpenAI request failed: ${errorText}`, 'openai', response.status);
       }
 
-      const result: AzureOpenAIResponse = await response.json();
-
-      if (!result.choices || result.choices.length === 0) {
-        throw new AzureServiceError('No response choices returned', 'openai');
-      }
-
+      const result = await response.json();
+      
       return {
-        content: result.choices[0].message.content,
+        content: result.choices[0]?.message?.content || 'No response generated',
         tokens: result.usage?.total_tokens || 0,
-        model: result.model,
-        finishReason: result.choices[0].finish_reason
+        model: result.model || this.deploymentName,
+        finishReason: result.choices[0]?.finish_reason || 'unknown'
       };
     } catch (error) {
-      if (error instanceof AzureServiceError) {
-        throw error;
-      }
-      throw new AzureServiceError(
-        `OpenAI service error: ${error instanceof Error ? error.message : 'Unknown error'}`,
-        'openai'
-      );
+      if (error instanceof AzureServiceError) throw error;
+      throw new AzureServiceError(`OpenAI error: ${error instanceof Error ? error.message : 'Unknown error'}`, 'openai');
     }
   }
 }
 
-// RAG Service - Combines search and generation
 export class RAGService {
   private searchService: AzureSearchService;
   private openAIService: AzureOpenAIService;
@@ -808,16 +286,10 @@ export class RAGService {
 
   async processQuery(
     query: string,
-    filters?: {
-      authors?: string[];
-      categories?: string[];
-      dateRange?: { start?: string; end?: string };
-      documentIds?: string[];
-    },
+    filters?: any,
     options: {
       temperature?: number;
       maxTokens?: number;
-      model?: string;
       topDocuments?: number;
     } = {}
   ): Promise<{
@@ -838,63 +310,53 @@ export class RAGService {
     const startTime = Date.now();
 
     try {
-      // Step 1: Search for relevant documents
-      const searchResult = await this.searchService.searchDocuments(
-        query,
-        filters,
-        options.topDocuments || 5
-      );
-
-      // Step 2: Prepare context from search results
-      const context = searchResult.documents
-        .map((doc, index) => {
-          const hasContent = doc.content && doc.content.trim().length > 0;
-          const contentSection = hasContent ? 
-            `Content: ${doc.content.trim()}` : 
-            `Content: [Document content not available - this is a ${doc.type} file: ${doc.title}]`;
-          
-          return `Document ${index + 1}: ${doc.title}
-Author: ${doc.author || 'Unknown'}
-Type: ${doc.type || 'Document'}
-Category: ${doc.category || 'General'}
-${contentSection}`;
-        })
-        .join('\n\n---\n\n');
-
-      // Add debugging for context quality
-      const totalContentLength = searchResult.documents.reduce((sum, doc) => sum + (doc.content?.length || 0), 0);
-      const documentsWithContent = searchResult.documents.filter(doc => doc.content && doc.content.trim().length > 0).length;
+      console.log(`🔍 Processing query: "${query}"`);
       
-      console.log('🤖 RAG Context Analysis:', {
-        totalDocuments: searchResult.documents.length,
-        documentsWithContent,
-        totalContentLength,
-        averageScore: searchResult.documents.reduce((sum, doc) => sum + ((doc as any)['@search.score'] || 0), 0) / searchResult.documents.length,
-        contextPreview: context.substring(0, 300) + '...'
-      });
+      // Step 1: Search for documents
+      const searchResult = await this.searchService.searchDocuments(query, options.topDocuments || 5);
+      
+      if (searchResult.documents.length === 0) {
+        return {
+          response: "I couldn't find any relevant documents for your query. Please try rephrasing your question.",
+          sources: [],
+          confidence: 0.1,
+          tokens: 0,
+          processingTime: (Date.now() - startTime) / 1000,
+          model: 'none'
+        };
+      }
 
-      // Step 3: Create system prompt for RAG
-      const hasActualContent = documentsWithContent > 0;
-      const systemPrompt = `You are a knowledgeable AI assistant helping with document analysis and information retrieval. You have access to a collection of documents and should provide accurate, helpful responses based on the available information.
+      // Step 2: Prepare context
+      const documentsWithContent = searchResult.documents.filter(doc => doc.content && doc.content.trim());
+      
+      console.log(`📚 Found ${searchResult.documents.length} documents, ${documentsWithContent.length} with content`);
 
-Guidelines:
-- Use the provided context to answer questions accurately
-- When document content is available, analyze it thoroughly to provide specific answers
-- If document content is not available but you have document metadata (title, author, type), use that information constructively
-- Cite specific sources when providing information (e.g., "According to [document title]...")
-- If information isn't available in any form, clearly state this and suggest what type of document might contain the answer
-- Provide comprehensive but concise responses
-- Focus on being helpful and informative
+      let contextContent = '';
+      if (documentsWithContent.length > 0) {
+        contextContent = documentsWithContent
+          .map((doc, index) => `[Document ${index + 1}: ${doc.title}]\n${doc.content}\n`)
+          .join('\n---\n\n');
+      } else {
+        // If no content available, list the documents found
+        contextContent = searchResult.documents
+          .map((doc, index) => `[Document ${index + 1}: ${doc.title}]\nType: ${doc.type}\nAuthor: ${doc.author}\nNo text content available for this ${doc.type} file.\n`)
+          .join('\n---\n\n');
+      }
 
-Context Analysis:
-- Total documents found: ${searchResult.documents.length}
-- Documents with content: ${documentsWithContent}
-- Content availability: ${hasActualContent ? 'Good' : 'Limited - working with document metadata only'}
+      // Step 3: Create system prompt
+      const systemPrompt = documentsWithContent.length > 0 ? 
+        `You are a helpful assistant that answers questions based on document content. Use the following documents to answer the user's question. Cite specific documents when referencing information.
 
-Available context:
-${context}`;
+Documents:
+${contextContent}` :
+        `You are a helpful assistant. I found these documents related to the user's query, but their text content is not accessible (they may be binary files like PDFs, Word docs, etc.):
 
-      // Step 4: Generate response using Azure OpenAI
+Documents found:
+${contextContent}
+
+Provide helpful guidance about what these documents might contain and suggest how the user might access their content.`;
+
+      // Step 4: Generate response
       const messages: AzureOpenAIMessage[] = [
         { role: 'system', content: systemPrompt },
         { role: 'user', content: query }
@@ -902,213 +364,47 @@ ${context}`;
 
       const aiResponse = await this.openAIService.generateResponse(messages, options);
 
-      // Step 5: Calculate confidence based on search scores and finish reason
-      const avgSearchScore = searchResult.documents.length > 0
-        ? searchResult.documents.reduce((sum, doc) => sum + ((doc as any)['@search.score'] || 0), 0) / searchResult.documents.length
-        : 0;
-
-      const confidence = Math.min(0.95, Math.max(0.3, 
-        avgSearchScore * 0.7 + (aiResponse.finishReason === 'stop' ? 0.3 : 0.1)
-      ));
-
-      // Step 6: Format sources
+      // Step 5: Format response
       const sources = searchResult.documents.map(doc => ({
-        name: doc.title || 'Untitled Document',
+        name: doc.title,
         author: doc.author || 'Unknown',
-        relevance: (doc as any)['@search.score'] || 0.5,
+        relevance: 0.8, // Simplified
         type: doc.type || 'Document',
         category: doc.category || 'General',
         id: doc.id
       }));
 
-      const processingTime = (Date.now() - startTime) / 1000;
-
       return {
         response: aiResponse.content,
         sources,
-        confidence,
+        confidence: documentsWithContent.length > 0 ? 0.8 : 0.4,
         tokens: aiResponse.tokens,
-        processingTime,
+        processingTime: (Date.now() - startTime) / 1000,
         model: aiResponse.model
       };
     } catch (error) {
-      if (error instanceof AzureServiceError) {
-        throw error;
-      }
-      throw new AzureServiceError(
-        `RAG processing error: ${error instanceof Error ? error.message : 'Unknown error'}`,
-        'rag'
-      );
+      console.error('💥 RAG processing error:', error);
+      if (error instanceof AzureServiceError) throw error;
+      throw new AzureServiceError(`RAG error: ${error instanceof Error ? error.message : 'Unknown error'}`, 'rag');
     }
   }
 
   async getAvailableFilters() {
     return this.searchService.getAvailableFilters();
   }
-
-  // Debug method to test search and content extraction
-  async debugSearch(query: string = '*'): Promise<{
-    searchResults: any[];
-    contentAnalysis: {
-      totalDocs: number;
-      docsWithContent: number;
-      sampleContent: string[];
-    };
-  }> {
-    const searchResult = await this.searchService.searchDocuments(query, undefined, 3);
-    
-    const contentAnalysis = {
-      totalDocs: searchResult.documents.length,
-      docsWithContent: searchResult.documents.filter(doc => doc.content && doc.content.trim()).length,
-      sampleContent: searchResult.documents.map(doc => 
-        doc.content ? doc.content.substring(0, 200) + '...' : 'NO CONTENT'
-      )
-    };
-
-    return {
-      searchResults: searchResult.documents.map(doc => ({
-        title: doc.title,
-        author: doc.author,
-        type: doc.type,
-        hasContent: !!doc.content,
-        contentLength: doc.content?.length || 0,
-        score: (doc as any)['@search.score']
-      })),
-      contentAnalysis
-    };
-  }
 }
 
-// Export singleton instances
+// Export instances
 export const ragService = new RAGService();
 export const searchService = new AzureSearchService();
 export const openAIService = new AzureOpenAIService();
-
-// Helper function to map Azure metadata fields to frontend format
-const mapAzureDocumentToFrontend = (azureDoc: any): AzureSearchDocument & { '@search.score'?: number } => {
-  // Determine the best title for the document
-  let title = 'Untitled Document';
-  
-  if (azureDoc.metadata_title && azureDoc.metadata_title.trim()) {
-    title = azureDoc.metadata_title.trim();
-  } else if (azureDoc.metadata_storage_path) {
-    // Extract filename from storage path
-    const pathParts = azureDoc.metadata_storage_path.split('/');
-    let filename = pathParts[pathParts.length - 1];
-    
-    if (filename) {
-      // Decode URL encoding (handles spaces like %20)
-      try {
-        filename = decodeURIComponent(filename);
-      } catch (e) {
-        // If decoding fails, use as-is
-      }
-      
-      // Remove file extension for cleaner display
-      const lastDotIndex = filename.lastIndexOf('.');
-      if (lastDotIndex > 0) {
-        title = filename.substring(0, lastDotIndex);
-      } else {
-        title = filename;
-      }
-      
-      // Clean up the title (replace underscores, handle camelCase, etc.)
-      title = title
-        .replace(/[_-]/g, ' ')  // Replace underscores and dashes with spaces
-        .replace(/([a-z])([A-Z])/g, '$1 $2')  // Add space between camelCase
-        .replace(/\s+/g, ' ')  // Normalize multiple spaces
-        .trim();
-      
-      // Capitalize first letter of each word
-      title = title.replace(/\b\w/g, l => l.toUpperCase());
-    }
-  }
-
-  const mapped = {
-    id: azureDoc.metadata_storage_path || azureDoc.id || '',
-    title,
-    content: azureDoc.content || '',
-    author: azureDoc.metadata_author || 'Unknown Author',
-    category: azureDoc.metadata_storage_content_type || 'Unknown Type',
-    type: azureDoc.metadata_storage_file_extension?.replace('.', '').toUpperCase() || 'Document',
-    date: azureDoc.metadata_storage_last_modified || azureDoc.metadata_creation_date || new Date().toISOString(),
-    size: azureDoc.metadata_storage_size ? formatBytes(azureDoc.metadata_storage_size) : undefined,
-    status: 'active', // Default status
-    downloads: 0, // Not available in metadata
-    metadata: {
-      content_type: azureDoc.metadata_content_type,
-      language: azureDoc.metadata_language,
-      file_extension: azureDoc.metadata_storage_file_extension,
-      content_md5: azureDoc.metadata_storage_content_md5
-    },
-    '@search.score': azureDoc['@search.score'] // Preserve search score
-  };
-
-  // Debug logging for title mapping
-  console.log('📄 Document mapping:', {
-    originalPath: azureDoc.metadata_storage_path,
-    originalTitle: azureDoc.metadata_title,
-    extractedTitle: title,
-    finalMapped: {
-      id: mapped.id,
-      title: mapped.title,
-      author: mapped.author,
-      type: mapped.type,
-      category: mapped.category
-    }
-  });
-
-  return mapped;
-};
-
-// Helper function to format bytes
-const formatBytes = (bytes: number): string => {
-  if (bytes === 0) return '0 Bytes';
-  const k = 1024;
-  const sizes = ['Bytes', 'KB', 'MB', 'GB'];
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
-  return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
-};
-
-// Export error class
 export { AzureServiceError };
 
-// Debug function for testing search and content extraction
-export const debugRAGSearch = async (query: string = 'azure standup') => {
-  return await ragService.debugSearch(query);
-};
-
-// Debug function to check Azure configuration
+// Debug function
 export const debugAzureConfig = () => {
-  console.log('🔧 Azure Configuration Check:');
-  console.log('OpenAI:', {
-    endpoint: azureConfig.openai.endpoint ? '✅ Set' : '❌ Missing',
-    apiKey: azureConfig.openai.apiKey ? '✅ Set' : '❌ Missing',
-    deploymentName: azureConfig.openai.deploymentName,
-    apiVersion: azureConfig.openai.apiVersion
-  });
-  console.log('Search:', {
-    endpoint: azureConfig.search.endpoint ? '✅ Set' : '❌ Missing',
-    apiKey: azureConfig.search.apiKey ? '✅ Set' : '❌ Missing',
-    indexName: azureConfig.search.indexName
-  });
-  console.log('Storage:', {
-    accountName: azureConfig.storage?.accountName ? '✅ Set' : '❌ Missing',
-    containerName: azureConfig.storage?.containerName || 'documents',
-    accountKey: azureConfig.storage?.accountKey ? '✅ Set' : '❌ Missing'
-  });
-  
-  // Check environment variables directly
-  console.log('🌍 Environment Variables:');
-  console.log({
-    VITE_AZURE_OPENAI_ENDPOINT: import.meta.env.VITE_AZURE_OPENAI_ENDPOINT ? '✅ Set' : '❌ Missing',
-    VITE_AZURE_OPENAI_API_KEY: import.meta.env.VITE_AZURE_OPENAI_API_KEY ? '✅ Set' : '❌ Missing',
-    VITE_AZURE_SEARCH_ENDPOINT: import.meta.env.VITE_AZURE_SEARCH_ENDPOINT ? '✅ Set' : '❌ Missing',
-    VITE_AZURE_SEARCH_API_KEY: import.meta.env.VITE_AZURE_SEARCH_API_KEY ? '✅ Set' : '❌ Missing',
-    VITE_AZURE_SEARCH_INDEX_NAME: import.meta.env.VITE_AZURE_SEARCH_INDEX_NAME ? '✅ Set' : '❌ Missing',
-    VITE_AZURE_STORAGE_ACCOUNT_NAME: import.meta.env.VITE_AZURE_STORAGE_ACCOUNT_NAME ? '✅ Set' : '❌ Missing',
-    VITE_AZURE_STORAGE_CONTAINER_NAME: import.meta.env.VITE_AZURE_STORAGE_CONTAINER_NAME ? '✅ Set' : '❌ Missing'
-  });
-  
+  console.log('🔧 Azure Configuration:');
+  console.log('OpenAI Endpoint:', azureConfig.openai.endpoint ? '✅ Set' : '❌ Missing');
+  console.log('Search Endpoint:', azureConfig.search.endpoint ? '✅ Set' : '❌ Missing');
+  console.log('Index Name:', azureConfig.search.indexName);
   return azureConfig;
 }; 

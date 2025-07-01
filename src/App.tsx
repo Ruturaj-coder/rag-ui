@@ -646,8 +646,9 @@ const RAGChatbot = () => {
         // Load available filters from Azure Search
         const filters = await ragService.getAvailableFilters();
         
-        setAzureAuthors(filters.authors);
-        setAzureCategories(filters.categories.map(c => c.name));
+        // Handle filter structure  
+        setAzureAuthors(filters.authors || []);
+        setAzureCategories((filters.categories || []).map(c => c.name));
         
         // Load initial document list (empty search to get all)
         const searchResult = await ragService.processQuery('*', {}, { topDocuments: 50 });
@@ -742,7 +743,6 @@ const RAGChatbot = () => {
         {
           temperature,
           maxTokens,
-          model: selectedModel,
           topDocuments: 10
         }
       );
