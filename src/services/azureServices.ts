@@ -292,66 +292,49 @@ export class AzureSearchService {
     try {
       // Discover field mapping if not done yet
       await this.discoverFieldMapping();
-  
-      // Build URL manually to avoid URLSearchParams encoding issues
-      const params = [
-        'api-version=2023-11-01',
-        `search=${encodeURIComponent(query || '*')}`,
-        `$top=${Math.min(top, 50)}`, // Cap at 50 to prevent large requests
-        '$count=true',
-        'searchMode=any',
-      ];
-  
-      // Add highlight parameter
-      if (this.fieldMapping.title) {
-        params.push(`highlight=${encodeURIComponent(`content,${this.fieldMapping.title}`)}`);
-      } else {
-        params.push('highlight=content');
-      }
-  
-      // Add select parameter
-      params.push('select=*');
-  
+
+      const searchParams = new URLSearchParams({
+        'api-version': '2023-11-01',
+        search: query || '*',
+        '$top': top.toString(),
+        '$count': 'true',
+        'searchMode': 'any',
+        'highlight': `content${this.fieldMapping.title ? ',' + this.fieldMapping.title : ''}`,
+        'select': '*' // Select all fields initially, we'll map them in the response
+      });
+
       // Build filter string using discovered field names
       const filterConditions = [];
       
       if (filters?.authors && filters.authors.length > 0 && this.fieldMapping.author) {
-        const authorFilter = filters.authors.map(author => 
-          `${this.fieldMapping.author} eq '${author.replace(/'/g, "''")}'`
-        ).join(' or ');
+        const authorFilter = filters.authors.map(author => `${this.fieldMapping.author} eq '${author.replace(/'/g, "''")}'`).join(' or ');
         filterConditions.push(`(${authorFilter})`);
       }
-  
+
       if (filters?.categories && filters.categories.length > 0 && this.fieldMapping.contentType) {
-        const categoryFilter = filters.categories.map(cat => 
-          `${this.fieldMapping.contentType} eq '${cat.replace(/'/g, "''")}'`
-        ).join(' or ');
+        const categoryFilter = filters.categories.map(cat => `${this.fieldMapping.contentType} eq '${cat.replace(/'/g, "''")}'`).join(' or ');
         filterConditions.push(`(${categoryFilter})`);
       }
-  
+
       if (filters?.documentIds && filters.documentIds.length > 0) {
-        const idFilter = filters.documentIds.map(id => 
-          `metadata_storage_path eq '${id.replace(/'/g, "''")}'`
-        ).join(' or ');
+        const idFilter = filters.documentIds.map(id => `metadata_storage_path eq '${id.replace(/'/g, "''")}'`).join(' or ');
         filterConditions.push(`(${idFilter})`);
       }
-  
+
       if (filters?.dateRange?.start && this.fieldMapping.lastModified) {
         filterConditions.push(`${this.fieldMapping.lastModified} ge ${filters.dateRange.start}T00:00:00Z`);
       }
-  
+
       if (filters?.dateRange?.end && this.fieldMapping.lastModified) {
         filterConditions.push(`${this.fieldMapping.lastModified} le ${filters.dateRange.end}T23:59:59Z`);
       }
-  
+
       if (filterConditions.length > 0) {
-        params.push(`$filter=${encodeURIComponent(filterConditions.join(' and '))}`);
+        searchParams.append('$filter', filterConditions.join(' and '));
       }
-  
-      const url = `${this.baseUrl}/indexes/${this.indexName}/docs?${params.join('&')}`;
-      
-      console.log('🔗 Search URL:', url); // Debug log
-  
+
+      const url = `${this.baseUrl}/indexes/${this.indexName}/docs?${searchParams.toString()}`;
+
       const response = await fetch(url, {
         method: 'GET',
         headers: {
@@ -359,22 +342,15 @@ export class AzureSearchService {
           'api-key': this.apiKey
         }
       });
-  
+
       if (!response.ok) {
-        const errorText = await response.text();
-        console.error('❌ Search failed:', {
-          status: response.status,
-          statusText: response.statusText,
-          url: url,
-          errorText: errorText
-        });
         throw new AzureServiceError(
-          `Search request failed: ${response.status} ${response.statusText} - ${errorText}`,
+          `Search request failed: ${response.statusText}`,
           'search',
           response.status
         );
       }
-  
+
       const result: AzureSearchResult = await response.json();
       
       // Add debugging for the first few results
@@ -385,10 +361,14 @@ export class AzureSearchService {
             // All metadata fields for debugging
             metadata_storage_path: rawDoc.metadata_storage_path,
             metadata_title: rawDoc.metadata_title,
-            author: rawDoc[this.fieldMapping.author || 'metadata_author'],
-            contentType: rawDoc[this.fieldMapping.contentType || 'metadata_storage_content_type'],
+            metadata_author: rawDoc.metadata_author,
+            metadata_storage_content_type: rawDoc.metadata_storage_content_type,
+            metadata_storage_file_extension: rawDoc.metadata_storage_file_extension,
+            metadata_storage_size: rawDoc.metadata_storage_size,
             content: rawDoc.content ? rawDoc.content.substring(0, 100) + '...' : 'No content',
             '@search.score': rawDoc['@search.score'],
+            // Show ALL available fields
+            allFields: Object.keys(rawDoc).filter(key => !['content', '@search.score', '@search.highlights'].includes(key))
           };
         }));
       }
