@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Search, Send, Filter, X, Calendar, User, FileText, ChevronDown, Settings, Sparkles, Bot, Clock, TrendingUp, Database, Mic, MicOff, Copy, ThumbsUp, ThumbsDown, Share2, Download, Bookmark, MessageSquare, Brain, Zap, Shield, Globe, BarChart3, Eye, EyeOff, Moon, Sun, Palette, Volume2, VolumeX, AlertCircle, MapPin, Building, Star, Info } from 'lucide-react';
-import { ragService, AzureServiceError, debugAzureConfig, type AzureSearchDocument } from './services/azureServices';
+import { ragService, AzureServiceError, debugAzureConfig, testAzureServices, type AzureSearchDocument, type SearchFilters, type SearchFacets } from './services/azureServices';
 
 // Type definitions
 interface Source {
@@ -468,8 +468,11 @@ const RAGChatbot = () => {
   // Data loading states
   const [isLoadingFilters, setIsLoadingFilters] = useState<boolean>(true);
   const [azureDocuments, setAzureDocuments] = useState<Document[]>([]);
-  const [azureAuthors, setAzureAuthors] = useState<Author[]>([]);
-  const [azureCategories, setAzureCategories] = useState<string[]>([]);
+  const [azureFacets, setAzureFacets] = useState<SearchFacets>({
+    authors: [],
+    categories: [],
+    documentTypes: []
+  });
 
   // Advanced states
   const [conversationMode, setConversationMode] = useState<string>('standard'); // standard, creative, analytical
@@ -584,8 +587,8 @@ const RAGChatbot = () => {
   };
 
   // Use Azure data when available, fallback to empty arrays
-  const authors = azureAuthors;
-  const categories = azureCategories;
+  const authors = azureFacets.authors;
+  const categories = azureFacets.categories.map(cat => cat.name);
 
   // Use Azure documents when available, fallback to empty array
   const documents = azureDocuments;
@@ -641,14 +644,23 @@ const RAGChatbot = () => {
         
         // Debug Azure configuration first
         console.log('🚀 Starting Azure data load...');
-        debugAzureConfig();
+        const config = debugAzureConfig();
+        
+        if (!config) {
+          throw new AzureServiceError('Azure configuration is invalid or missing', 'config');
+        }
+        
+        // Test Azure services connection
+        const connectionTest = await testAzureServices();
+        console.log('🧪 Connection test results:', connectionTest);
+        
+        if (!connectionTest.search || !connectionTest.openai) {
+          throw new AzureServiceError('Service connection failed: ' + connectionTest.errors.join(', '), 'connection');
+        }
         
         // Load available filters from Azure Search
-        const filters = await ragService.getAvailableFilters();
-        
-        // Handle filter structure  
-        setAzureAuthors(filters.authors || []);
-        setAzureCategories((filters.categories || []).map(c => c.name));
+        const facets = await ragService.getAvailableFilters();
+        setAzureFacets(facets);
         
         // Load initial document list (empty search to get all)
         const searchResult = await ragService.processQuery('*', {}, { topDocuments: 50 });
@@ -677,8 +689,11 @@ const RAGChatbot = () => {
         setServiceStatus({ connected: false, message: 'Azure services unavailable' });
         
         // Set empty fallback data
-        setAzureAuthors([]);
-        setAzureCategories([]);
+        setAzureFacets({
+          authors: [],
+          categories: [],
+          documentTypes: []
+        });
         setAzureDocuments([]);
       } finally {
         setIsLoadingFilters(false);
@@ -725,16 +740,27 @@ const RAGChatbot = () => {
     setError(null);
 
     try {
-      // Prepare filters for Azure Search
-      const filters = {
-        authors: selectedAuthors.length > 0 ? selectedAuthors : undefined,
-        categories: selectedCategories.length > 0 ? selectedCategories : undefined,
-        dateRange: (dateRange.start || dateRange.end) ? {
+      // Prepare filters for Azure Search using the new SearchFilters interface
+      const filters: SearchFilters = {};
+      
+      if (selectedAuthors.length > 0) {
+        filters.authors = selectedAuthors;
+      }
+      
+      if (selectedCategories.length > 0) {
+        filters.categories = selectedCategories;
+      }
+      
+      if (dateRange.start || dateRange.end) {
+        filters.dateRange = {
           start: dateRange.start || undefined,
           end: dateRange.end || undefined
-        } : undefined,
-        documentIds: selectedDocuments.length > 0 ? selectedDocuments : undefined
-      };
+        };
+      }
+      
+      if (selectedDocuments.length > 0) {
+        filters.documentIds = selectedDocuments;
+      }
 
       // Use Azure RAG service to process the query
       const ragResult = await ragService.processQuery(
