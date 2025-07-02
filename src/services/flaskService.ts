@@ -105,12 +105,18 @@ class FlaskService {
     return this.request<FilterOptions>('/filters');
   }
 
-  // Health check method (basic connectivity test)
-  async healthCheck(): Promise<{ status: string }> {
+  // Health check method (uses dedicated health endpoint)
+  async healthCheck(): Promise<{ 
+    status: string; 
+    services?: { openai: boolean; search: boolean }; 
+    missing_env_vars?: string[];
+  }> {
     try {
-      // Try to get filters as a simple health check
-      await this.getFilterOptions();
-      return { status: 'connected' };
+      return this.request<{ 
+        status: string; 
+        services: { openai: boolean; search: boolean }; 
+        missing_env_vars: string[];
+      }>('/health');
     } catch (error) {
       throw new FlaskServiceError(
         'Backend health check failed',
