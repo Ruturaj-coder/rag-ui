@@ -1,33 +1,11 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Search, Send, Filter, X, Calendar, User, FileText, ChevronDown, Settings, Sparkles, Bot, Clock, TrendingUp, Database, Mic, MicOff, Copy, ThumbsUp, ThumbsDown, Share2, Download, Bookmark, MessageSquare, Brain, Zap, Shield, Globe, BarChart3, Eye, EyeOff, Moon, Sun, Palette, Volume2, VolumeX, AlertCircle, MapPin, Building, Star, Info } from 'lucide-react';
-import { ragService, AzureServiceError, debugAzureConfig, testAzureServices, type AzureSearchDocument, type SearchFilters, type SearchFacets, type FacetItem } from './services/apiService';
+import { flaskService, FlaskServiceError, debugFlaskConfig, testFlaskConnection, type ChatFilters, type FilterOptions, type Source, type Message } from './services/flaskService';
 
-// Type definitions
-interface Source {
-  name: string;
-  author: string;
-  relevance: number;
-  type: string;
-  category: string;
-  id: string; // Azure Storage path
-}
-
-interface Message {
-  id: number;
-  type: 'user' | 'bot';
-  content: string;
-  timestamp: Date;
-  sources: Source[];
-  confidence?: number;
-  tokens?: number;
-  processingTime?: number;
-  model?: string;
-  temperature?: number;
-}
+// Type definitions (Source and Message are imported from flaskService)
 
 interface Author {
   name: string;
-  expertise?: string;
   count: number;
 }
 
@@ -468,10 +446,9 @@ const RAGChatbot = () => {
   // Data loading states
   const [isLoadingFilters, setIsLoadingFilters] = useState<boolean>(true);
   const [azureDocuments, setAzureDocuments] = useState<Document[]>([]);
-  const [azureFacets, setAzureFacets] = useState<SearchFacets>({
+  const [filterOptions, setFilterOptions] = useState<FilterOptions>({
     authors: [],
-    categories: [],
-    documentTypes: []
+    file_types: []
   });
 
   // Advanced states
@@ -520,8 +497,7 @@ const RAGChatbot = () => {
     switch (category) {
       case 'authors':
         const filteredAuthors = authors.filter(author =>
-          author.name.toLowerCase().includes(authorSearchTerm.toLowerCase()) ||
-          (author.expertise && author.expertise.toLowerCase().includes(authorSearchTerm.toLowerCase()))
+          author.name.toLowerCase().includes(authorSearchTerm.toLowerCase())
         );
         setSelectedAuthors(filteredAuthors.map(a => a.name));
         break;
@@ -586,9 +562,9 @@ const RAGChatbot = () => {
     }
   };
 
-  // Use Azure data when available, fallback to empty arrays
-  const authors = azureFacets.authors;
-  const categories = azureFacets.categories.map(cat => cat.name);
+  // Use Flask data when available, fallback to empty arrays
+  const authors = filterOptions.authors.map(author => ({ name: author, count: 1 }));
+  const categories = filterOptions.file_types;
 
   // Use Azure documents when available, fallback to empty array
   const documents = azureDocuments;
@@ -608,8 +584,7 @@ const RAGChatbot = () => {
 
   // Enhanced functions and filtered data
   const filteredAuthors = authors.filter(author =>
-    author.name.toLowerCase().includes(authorSearchTerm.toLowerCase()) ||
-    (author.expertise && author.expertise.toLowerCase().includes(authorSearchTerm.toLowerCase()))
+    author.name.toLowerCase().includes(authorSearchTerm.toLowerCase())
   );
 
   const filteredCategories = categories.filter(category =>
@@ -635,64 +610,62 @@ const RAGChatbot = () => {
     scrollToBottom();
   }, [messages]);
 
-  // Load initial data from Azure services
+  // Load initial data from Flask backend
   useEffect(() => {
-    const loadAzureData = async () => {
+    const loadFlaskData = async () => {
       try {
         setIsLoadingFilters(true);
         setError(null);
         
-        // Debug Azure configuration first
-        console.log('🚀 Starting Azure data load...');
-        const config = debugAzureConfig();
+        // Debug Flask configuration first
+        console.log('🚀 Starting Flask data load...');
+        const config = debugFlaskConfig();
         
         if (!config) {
-          throw new AzureServiceError('Azure configuration is invalid or missing', 'config');
+          throw new FlaskServiceError('Flask configuration is invalid or missing', 'config');
         }
         
-        // Test Azure services connection
-        const connectionTest = await testAzureServices();
+        // Test Flask backend connection
+        const connectionTest = await testFlaskConnection();
         console.log('🧪 Connection test results:', connectionTest);
         
-        if (!connectionTest.search || !connectionTest.openai) {
-          throw new AzureServiceError('Service connection failed: ' + connectionTest.errors.join(', '), 'connection');
+        if (!connectionTest.connected) {
+          throw new FlaskServiceError('Flask connection failed: ' + (connectionTest.error || 'Unknown error'), 'connection');
         }
         
-        // Load available filters from Azure Search
-        const facets = await ragService.getAvailableFilters();
-        setAzureFacets(facets);
+        // Load available filters from Flask backend
+        const filters = await flaskService.getFilterOptions();
+        setFilterOptions(filters);
         
-        // Load initial document list (empty search to get all)
-        const searchResult = await ragService.processQuery('*', {}, { topDocuments: 50 });
+        // For simple demo, we'll create some mock documents since Flask doesn't provide document listing
+        const mockDocs: Document[] = [
+          {
+            id: '1',
+            name: 'Sample Document 1',
+            author: filters.authors[0] || 'Unknown',
+            date: new Date().toISOString().split('T')[0],
+            type: filters.file_types[0] || 'pdf',
+            category: 'General',
+            status: 'active'
+          }
+        ];
         
-        // Convert search results to Document format
-        const docs: Document[] = searchResult.sources.map(source => ({
-          id: source.id,
-          name: source.name,
-          author: source.author,
-          date: new Date().toISOString().split('T')[0], // Default to today if no date
-          type: source.type,
-          category: source.category,
-          status: 'active'
-        }));
-        
-        setAzureDocuments(docs);
-        setServiceStatus({ connected: true, message: 'Connected to Azure services' });
+        setAzureDocuments(mockDocs);
+        setServiceStatus({ connected: true, message: 'Connected to Flask backend' });
         
       } catch (err) {
-        console.error('Failed to load Azure data:', err);
-        if (err instanceof AzureServiceError) {
-          setError(`Azure ${err.service} error: ${err.message}`);
+        console.error('Failed to load Flask data:', err);
+        if (err instanceof FlaskServiceError) {
+          setError(`Flask ${err.service} error: ${err.message}`);
         } else {
-          setError('Failed to connect to Azure services. Please check your configuration.');
+          setError('Failed to connect to Flask backend. Please check your configuration.');
         }
-        setServiceStatus({ connected: false, message: 'Azure services unavailable' });
+        setServiceStatus({ connected: false, message: 'Flask backend unavailable' });
         
         // Set empty fallback data
-        setAzureFacets({
+        setFilterOptions({
           authors: [],
-          categories: [],
-          documentTypes: []
+          file_types: []
         });
         setAzureDocuments([]);
       } finally {
@@ -700,7 +673,7 @@ const RAGChatbot = () => {
       }
     };
 
-    loadAzureData();
+    loadFlaskData();
   }, []);
 
   useEffect(() => {
@@ -740,65 +713,42 @@ const RAGChatbot = () => {
     setError(null);
 
     try {
-      // Prepare filters for Azure Search using the new SearchFilters interface
-      const filters: SearchFilters = {};
+      // Prepare filters for Flask backend (simplified)
+      const filters: ChatFilters = {};
       
       if (selectedAuthors.length > 0) {
-        filters.authors = selectedAuthors;
+        filters.author = selectedAuthors[0]; // Flask only supports single author
       }
       
       if (selectedCategories.length > 0) {
-        filters.categories = selectedCategories;
-      }
-      
-      if (dateRange.start || dateRange.end) {
-        filters.date_range = {
-          start: dateRange.start || undefined,
-          end: dateRange.end || undefined
-        };
-      }
-      
-      if (selectedDocuments.length > 0) {
-        filters.document_ids = selectedDocuments;
+        filters.file_type = selectedCategories[0]; // Flask only supports single file_type
       }
 
-      // Use Azure RAG service to process the query
-      const ragResult = await ragService.processQuery(
-        messageText,
-        filters,
-        {
-          temperature,
-          maxTokens,
-          topDocuments: 10
-        }
-      );
+      // Use Flask service to process the query
+      const chatResult = await flaskService.sendChatMessage({
+        query: messageText,
+        filters
+      });
 
-              const botResponse: Message = {
-          id: messages.length + 2,
-          type: 'bot',
-          content: ragResult.response,
-          timestamp: new Date(),
-          sources: ragResult.sources.map(source => ({
-            name: source.name,
-            author: source.author,
-            relevance: source.relevance, // Raw Azure Search score
-            type: source.type,
-            category: source.category,
-            id: source.id // Azure Storage path
-          })),
-          confidence: ragResult.confidence,
-          tokens: ragResult.tokens,
-          processingTime: ragResult.processing_time,
-          model: ragResult.model,
-          temperature: temperature
-        };
+      const botResponse: Message = {
+        id: messages.length + 2,
+        type: 'bot',
+        content: chatResult.answer,
+        timestamp: new Date(),
+        sources: [], // Flask backend doesn't return sources in current implementation
+        confidence: 0.8, // Default confidence since Flask doesn't provide it
+        tokens: chatResult.answer.split(' ').length, // Rough token estimate
+        processingTime: 0, // Flask doesn't provide timing
+        model: selectedModel,
+        temperature: temperature
+      };
 
       setMessages(prev => [...prev, botResponse]);
 
       // Text-to-speech if enabled
       if (audioEnabled && 'speechSynthesis' in window) {
         const utterance = new SpeechSynthesisUtterance(
-          ragResult.response.replace(/\*\*/g, '').replace(/•/g, '').replace(/#{1,6}\s/g, '')
+          chatResult.answer.replace(/\*\*/g, '').replace(/•/g, '').replace(/#{1,6}\s/g, '')
         );
         utterance.rate = 0.9;
         utterance.pitch = 1;
@@ -810,9 +760,9 @@ const RAGChatbot = () => {
       
       let errorMessage = 'Sorry, I encountered an error processing your request. ';
       
-      if (err instanceof AzureServiceError) {
-        errorMessage += `Azure ${err.service} error: ${err.message}`;
-        setError(`Azure ${err.service} error: ${err.message}`);
+      if (err instanceof FlaskServiceError) {
+        errorMessage += `Flask ${err.service} error: ${err.message}`;
+        setError(`Flask ${err.service} error: ${err.message}`);
       } else {
         errorMessage += 'Please try again or check your connection.';
         setError('Failed to process your request. Please try again.');
@@ -1603,7 +1553,7 @@ const RAGChatbot = () => {
                                   {author.name}
                                 </div>
                                 <div className={`text-xs ${darkMode ? 'text-gray-400' : 'text-gray-500'}`}>
-                                  {author.expertise || 'No expertise listed'} • {author.count} documents
+                                  Author • {author.count} documents
                                 </div>
                               </div>
                             </label>
