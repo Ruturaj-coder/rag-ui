@@ -101,25 +101,42 @@ def chat():
         if filters:
             print(f"📊 Applied filters: {filters}")
 
-        # Build filter string (using teammate's approach)
+        # Map frontend filter names to Azure AI Search field names
+        field_mapping = {
+            'authors': 'author',
+            'file_type': 'documentType',
+            'file_types': 'data_product_type',
+            'content_type': 'documentType',
+            'extension': 'extension',
+            'language': 'language',
+            'topic': 'topic',
+            'business_unit': 'owner_business_unit',
+            'owner_business': 'owner_business',
+            'user_group': 'user_group'
+        }
+
+        # Build filter string
         filter_conditions = []
         for key, value in filters.items():
             if value and str(value).strip():
-                filter_conditions.append(f"{key} eq '{value}'")
+                # Map frontend field name to Azure field name
+                azure_field = field_mapping.get(key, key)
+                filter_conditions.append(f"{azure_field} eq '{value}'")
         filter_string = ' and '.join(filter_conditions) if filter_conditions else None
 
-        # Perform hybrid search (teammate's approach)
+        # Perform hybrid search using correct field names
         try:
             vector_query = VectorizableTextQuery(text=query, k_nearest_neighbors=5, fields="vector")
             search_args = {
                 "search_text": query,
                 "vector_queries": [vector_query],
                 "select": [
-                    "title", "chunk", "parent_id", "document_id", "document_title",
-                    "chunk_id", "author", "language", "topic", "summary", "keywords",
+                    "parent_id", "title", "chunk_id", "chunk", "documentType", "author",
+                    "Documentid", "document_title", "language", "topic", "summary", "keywords",
                     "element", "entities", "user_group", "extension", "data_product_id",
                     "data_product_name", "data_product_type", "data_product_description",
-                    "owner_business", "storage_location", "version", "creation_date", "update_date"
+                    "owner_business_unit", "owner_business", "owner_technical", "owner_group",
+                    "storage_location", "version", "creation_date", "update_date"
                 ],
                 "top": 5
             }
@@ -132,27 +149,44 @@ def chat():
             # Fallback to basic search if vector search fails
             search_args = {
                 "search_text": query,
+                "select": [
+                    "parent_id", "title", "chunk_id", "chunk", "documentType", "author",
+                    "Documentid", "document_title", "language", "topic", "summary", "keywords",
+                    "element", "entities", "user_group", "extension", "data_product_id",
+                    "data_product_name", "data_product_type", "data_product_description",
+                    "owner_business_unit", "owner_business", "owner_technical", "owner_group",
+                    "storage_location", "version", "creation_date", "update_date"
+                ],
                 "top": 5
             }
             if filter_string:
                 search_args["filter"] = filter_string
             results = search_client.search(**search_args)
 
-        # Prepare context and sources (teammate's approach)
+        # Prepare context and sources using correct field names
         retrieved_context = ""
         sources = []
         result_count = 0
 
         for result in results:
-            # Use 'chunk' field instead of 'content' (this was the main issue!)
-            chunk = result.get('chunk', result.get('content', ''))
+            # Use 'chunk' field for content
+            chunk = result.get('chunk', '')
             retrieved_context += chunk + "\n"
             sources.append({
-                'title': result.get('title', 'N/A'),
+                'title': result.get('title', result.get('document_title', 'N/A')),
                 'author': result.get('author', 'N/A'),
-                'document_title': result.get('document_title', 'N/A'),
+                'document_title': result.get('document_title', result.get('title', 'N/A')),
+                'document_type': result.get('documentType', 'N/A'),
+                'language': result.get('language', 'N/A'),
                 'topic': result.get('topic', 'N/A'),
                 'data_product_type': result.get('data_product_type', 'N/A'),
+                'owner_business': result.get('owner_business', 'N/A'),
+                'user_group': result.get('user_group', 'N/A'),
+                'extension': result.get('extension', 'N/A'),
+                'document_id': result.get('Documentid', result.get('parent_id', 'N/A')),
+                'chunk_id': result.get('chunk_id', 'N/A'),
+                'creation_date': str(result.get('creation_date', 'N/A')),
+                'update_date': str(result.get('update_date', 'N/A'))
             })
             result_count += 1
 
@@ -164,7 +198,7 @@ def chat():
                 "result_count": 0
             })
 
-        # Generate response (teammate's approach)
+        # Generate response
         system_prompt = (
             "You are a helpful AI assistant. Answer the user's question based ONLY on the context "
             "provided below. If the answer is not in the context, say 'I don't have enough information "
@@ -199,7 +233,7 @@ def chat():
 
 @app.route("/filters", methods=["GET"])
 def get_filter_options():
-    """Get available filter options from the search index (teammate's approach)"""
+    """Get available filter options from the search index"""
     try:
         # Check if Azure search client is available
         if not search_client:
@@ -212,12 +246,14 @@ def get_filter_options():
 
         print("🔍 Fetching filter options from Azure Search...")
         
-        # Use teammate's field names
+        # Use actual field names from the index
         filter_options = {
             'author': [],
+            'documentType': [],
             'language': [],
             'topic': [],
             'data_product_type': [],
+            'owner_business_unit': [],
             'owner_business': [],
             'user_group': [],
             'extension': []
@@ -236,14 +272,18 @@ def get_filter_options():
 
             print(f"✅ Found filter options: {len(filter_options)} categories")
             
-            # Convert to your frontend's expected format
+            # Convert to frontend's expected format
             return jsonify({
                 "authors": filter_options.get('author', []),
-                "file_types": filter_options.get('data_product_type', []) + filter_options.get('extension', []),
+                "file_types": filter_options.get('documentType', []) + filter_options.get('data_product_type', []),
+                "document_types": filter_options.get('documentType', []),
                 "languages": filter_options.get('language', []),
                 "topics": filter_options.get('topic', []),
-                "business_units": filter_options.get('owner_business', []),
-                "user_groups": filter_options.get('user_group', [])
+                "business_units": filter_options.get('owner_business_unit', []),
+                "owner_business": filter_options.get('owner_business', []),
+                "user_groups": filter_options.get('user_group', []),
+                "extensions": filter_options.get('extension', []),
+                "data_product_types": filter_options.get('data_product_type', [])
             })
             
         except Exception as facet_error:
@@ -251,6 +291,7 @@ def get_filter_options():
             # Fallback to basic search if facets fail
             authors = set()
             topics = set()
+            languages = set()
             
             results = search_client.search("*", top=100)
             for doc in results:
@@ -258,11 +299,14 @@ def get_filter_options():
                     authors.add(doc.get("author"))
                 if doc.get("topic"):
                     topics.add(doc.get("topic"))
+                if doc.get("language"):
+                    languages.add(doc.get("language"))
             
             return jsonify({
                 "authors": sorted(list(authors)),
-                "file_types": ["pdf", "docx", "txt"],
-                "topics": sorted(list(topics))
+                "topics": sorted(list(topics)),
+                "languages": sorted(list(languages)),
+                "file_types": ["pdf", "docx", "txt"]
             })
         
     except Exception as e:
@@ -273,6 +317,43 @@ def get_filter_options():
             "error": f"Failed to fetch from Azure Search: {str(e)}",
             "note": "Returning mock data due to error"
         })
+
+@app.route("/debug/fields", methods=["GET"])
+def debug_fields():
+    """Debug endpoint to discover available fields in the search index"""
+    try:
+        if not search_client:
+            return jsonify({"error": "Search client not available"}), 503
+        
+        # Get a sample document to see what fields are available
+        results = search_client.search("*", top=1)
+        
+        sample_doc = None
+        available_fields = []
+        
+        for result in results:
+            sample_doc = dict(result)
+            available_fields = list(sample_doc.keys())
+            break
+        
+        if not sample_doc:
+            return jsonify({
+                "message": "No documents found in index",
+                "available_fields": [],
+                "sample_document": None
+            })
+        
+        return jsonify({
+            "message": "Available fields in your Azure AI Search index",
+            "available_fields": sorted(available_fields),
+            "sample_document": sample_doc,
+            "field_count": len(available_fields)
+        })
+        
+    except Exception as e:
+        return jsonify({
+            "error": f"Failed to fetch field information: {str(e)}"
+        }), 500
 
 if __name__ == "__main__":
     app.run(debug=True, host='127.0.0.1', port=5000)
