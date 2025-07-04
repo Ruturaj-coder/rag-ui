@@ -1,16 +1,13 @@
 import azure.functions as func
 import logging
-from flask import Flask, request, jsonify
-from flask_cors import CORS
+import json
+import os
 from azure.core.credentials import AzureKeyCredential
 from azure.search.documents import SearchClient
-from azure.search.documents.models import VectorizableTextQuery
 from openai import AzureOpenAI
-import os
 
-# Initialize Flask app
-app = Flask(__name__)
-CORS(app)  # Enable CORS for React
+# Create the main function app
+app = func.FunctionApp(http_auth_level=func.AuthLevel.ANONYMOUS)
 
 # ENV VARIABLES
 AZURE_OPENAI_API_KEY = os.getenv("AZURE_OPENAI_API_KEY")
@@ -58,10 +55,11 @@ except Exception as e:
     openai_client = None
     search_client = None
 
-# COPY ALL YOUR EXISTING FLASK ROUTES HERE
-@app.route("/health", methods=["GET"])
-def health_check():
+# FUNCTION 1: Health Check
+@app.route(route="health", methods=["GET"])
+def health_check(req: func.HttpRequest) -> func.HttpResponse:
     """Health check endpoint to verify service status"""
+    
     status = {
         "status": "healthy",
         "services": {
@@ -73,30 +71,54 @@ def health_check():
     
     if missing_vars or not openai_client or not search_client:
         status["status"] = "unhealthy"
-        return jsonify(status), 503
+        return func.HttpResponse(
+            json.dumps(status),
+            status_code=503,
+            mimetype="application/json"
+        )
     
-    return jsonify(status)
+    return func.HttpResponse(
+        json.dumps(status),
+        status_code=200,
+        mimetype="application/json"
+    )
 
-@app.route("/chat", methods=["POST"])
-def chat():
+# FUNCTION 2: Chat Endpoint
+@app.route(route="chat", methods=["POST"])
+def chat(req: func.HttpRequest) -> func.HttpResponse:
     """Chat endpoint with Azure OpenAI and Search"""
+    
     try:
         # Check if Azure clients are available
         if not openai_client or not search_client:
-            return jsonify({
-                "error": "Azure services not available. Please check environment variables.",
-                "missing_vars": missing_vars
-            }), 503
+            return func.HttpResponse(
+                json.dumps({
+                    "error": "Azure services not available. Please check environment variables.",
+                    "missing_vars": missing_vars
+                }),
+                status_code=503,
+                mimetype="application/json"
+            )
 
-        data = request.json
-        if not data:
-            return jsonify({"error": "No JSON data provided"}), 400
+        # Get request data
+        try:
+            req_body = req.get_json()
+        except ValueError:
+            return func.HttpResponse(
+                json.dumps({"error": "No JSON data provided"}),
+                status_code=400,
+                mimetype="application/json"
+            )
             
-        query = data.get("query")
+        query = req_body.get("query")
         if not query:
-            return jsonify({"error": "Query parameter is required"}), 400
+            return func.HttpResponse(
+                json.dumps({"error": "Query parameter is required"}),
+                status_code=400,
+                mimetype="application/json"
+            )
             
-        filters = data.get("filters", {})
+        filters = req_body.get("filters", {})
 
         logging.info(f"Processing query: {query}")
         if filters:
@@ -126,7 +148,7 @@ def chat():
         
         logging.info(f"Filter string: {filter_string}")
 
-        # Search logic (copy from your existing code)
+        # Search Azure AI Search
         try:
             search_args = {
                 "search_text": query,
@@ -144,10 +166,13 @@ def chat():
                 search_args["filter"] = filter_string
 
             results = search_client.search(**search_args)
+            logging.info("Search successful")
             
         except Exception as search_error:
             logging.error(f"Search failed: {str(search_error)}")
+            # Try with minimal fields
             try:
+                logging.info("Trying search with minimal fields...")
                 minimal_search_args = {
                     "search_text": query,
                     "top": 5
@@ -156,51 +181,83 @@ def chat():
                     minimal_search_args["filter"] = filter_string
                 
                 results = search_client.search(**minimal_search_args)
+                logging.info("Minimal field search successful")
                 
             except Exception as minimal_error:
-                return jsonify({
-                    "error": f"Search failed: {str(minimal_error)}",
-                    "filter_applied": filter_string
-                }), 500
+                logging.error(f"Minimal search also failed: {str(minimal_error)}")
+                return func.HttpResponse(
+                    json.dumps({
+                        "error": f"Search failed: {str(minimal_error)}",
+                        "original_error": str(search_error),
+                        "filter_applied": filter_string
+                    }),
+                    status_code=500,
+                    mimetype="application/json"
+                )
 
         # Process results
-        retrieved_context = ""
-        sources = []
-        result_count = 0
+        try:
+            logging.info("Processing search results...")
+            retrieved_context = ""
+            sources = []
+            result_count = 0
 
-        for result in results:
-            chunk = result.get('chunk', result.get('content', result.get('text', '')))
-            if not chunk:
-                chunk = result.get('summary', result.get('title', ''))
-            
-            retrieved_context += chunk + "\n"
-            sources.append({
-                'title': result.get('title', result.get('document_title', 'N/A')),
-                'author': result.get('author', 'N/A'),
-                'document_title': result.get('document_title', result.get('title', 'N/A')),
-                'document_type': result.get('documentType', 'N/A'),
-                'language': result.get('language', 'N/A'),
-                'topic': result.get('topic', 'N/A'),
-                'data_product_type': result.get('data_product_type', 'N/A'),
-                'owner_business': result.get('owner_business', 'N/A'),
-                'user_group': result.get('user_group', 'N/A'),
-                'extension': result.get('extension', 'N/A'),
-                'document_id': result.get('Documentid', result.get('parent_id', 'N/A')),
-                'chunk_id': result.get('chunk_id', 'N/A'),
-                'creation_date': str(result.get('creation_date', 'N/A')),
-                'update_date': str(result.get('update_date', 'N/A'))
-            })
-            result_count += 1
+            for result in results:
+                logging.info(f"Processing result: {list(dict(result).keys())}")
+                
+                # Use 'chunk' field for content, fallback to other possible field names
+                chunk = result.get('chunk', result.get('content', result.get('text', '')))
+                if not chunk:
+                    # Try to get any text-like field if chunk is empty
+                    chunk = result.get('summary', result.get('title', ''))
+                
+                retrieved_context += chunk + "\n"
+                sources.append({
+                    'title': result.get('title', result.get('document_title', 'N/A')),
+                    'author': result.get('author', 'N/A'),
+                    'document_title': result.get('document_title', result.get('title', 'N/A')),
+                    'document_type': result.get('documentType', 'N/A'),
+                    'language': result.get('language', 'N/A'),
+                    'topic': result.get('topic', 'N/A'),
+                    'data_product_type': result.get('data_product_type', 'N/A'),
+                    'owner_business': result.get('owner_business', 'N/A'),
+                    'user_group': result.get('user_group', 'N/A'),
+                    'extension': result.get('extension', 'N/A'),
+                    'document_id': result.get('Documentid', result.get('parent_id', 'N/A')),
+                    'chunk_id': result.get('chunk_id', 'N/A'),
+                    'creation_date': str(result.get('creation_date', 'N/A')),
+                    'update_date': str(result.get('update_date', 'N/A'))
+                })
+                result_count += 1
 
-        if not retrieved_context.strip():
-            return jsonify({
-                "answer": "I couldn't find any relevant information in the documents with the applied filters. Please try adjusting your query or filters.",
-                "sources": [],
-                "result_count": 0
-            })
+            logging.info(f"Processed {result_count} results")
+            logging.info(f"Retrieved context length: {len(retrieved_context)}")
+
+            if not retrieved_context.strip():
+                logging.warning("No relevant documents found")
+                return func.HttpResponse(
+                    json.dumps({
+                        "answer": "I couldn't find any relevant information in the documents with the applied filters. Please try adjusting your query or filters.",
+                        "sources": [],
+                        "result_count": 0
+                    }),
+                    status_code=200,
+                    mimetype="application/json"
+                )
+
+        except Exception as process_error:
+            logging.error(f"Error processing results: {str(process_error)}")
+            return func.HttpResponse(
+                json.dumps({
+                    "error": f"Error processing search results: {str(process_error)}"
+                }),
+                status_code=500,
+                mimetype="application/json"
+            )
 
         # Generate response with OpenAI
         try:
+            logging.info("Generating OpenAI response...")
             system_prompt = (
                 "You are a helpful AI assistant. Answer the user's question based ONLY on the context "
                 "provided below. If the answer is not in the context, say 'I don't have enough information "
@@ -218,42 +275,65 @@ def chat():
             )
 
             answer = response.choices[0].message.content
+            logging.info(f"Generated response for query: {query}")
             
-            return jsonify({
-                "answer": answer,
-                "sources": sources,
-                "result_count": result_count,
-                "filters_applied": filter_string
-            })
+            return func.HttpResponse(
+                json.dumps({
+                    "answer": answer,
+                    "sources": sources,
+                    "result_count": result_count,
+                    "filters_applied": filter_string
+                }),
+                status_code=200,
+                mimetype="application/json"
+            )
             
         except Exception as openai_error:
             logging.error(f"OpenAI error: {str(openai_error)}")
-            return jsonify({
-                "error": f"Error generating response: {str(openai_error)}",
-                "sources": sources,
-                "result_count": result_count
-            }), 500
+            return func.HttpResponse(
+                json.dumps({
+                    "error": f"Error generating response: {str(openai_error)}",
+                    "sources": sources,
+                    "result_count": result_count
+                }),
+                status_code=500,
+                mimetype="application/json"
+            )
         
     except Exception as e:
         logging.error(f"Unexpected error in chat endpoint: {str(e)}")
-        return jsonify({
-            "error": f"Failed to process chat request: {str(e)}"
-        }), 500
+        import traceback
+        logging.error(f"Traceback: {traceback.format_exc()}")
+        return func.HttpResponse(
+            json.dumps({
+                "error": f"Failed to process chat request: {str(e)}"
+            }),
+            status_code=500,
+            mimetype="application/json"
+        )
 
-@app.route("/filters", methods=["GET"])
-def get_filter_options():
+# FUNCTION 3: Filters Endpoint
+@app.route(route="filters", methods=["GET"])
+def get_filter_options(req: func.HttpRequest) -> func.HttpResponse:
     """Get available filter options from the search index"""
+    
     try:
+        # Check if Azure search client is available
         if not search_client:
             logging.warning("Search client not available for filters endpoint")
-            return jsonify({
-                "authors": ["Sample Author 1", "Sample Author 2"],
-                "file_types": ["pdf", "docx", "txt"],
-                "note": "Mock data - Azure Search not configured"
-            })
+            return func.HttpResponse(
+                json.dumps({
+                    "authors": ["Sample Author 1", "Sample Author 2"],
+                    "file_types": ["pdf", "docx", "txt"],
+                    "note": "Mock data - Azure Search not configured"
+                }),
+                status_code=200,
+                mimetype="application/json"
+            )
 
         logging.info("Fetching filter options from Azure Search...")
         
+        # Use actual field names from the index
         filter_options = {
             'author': [],
             'documentType': [],
@@ -277,21 +357,29 @@ def get_filter_options():
                     facets = search_results.get_facets().get(field, [])
                     filter_options[field] = [facet['value'] for facet in facets if facet['count'] > 0]
 
-            return jsonify({
-                "authors": filter_options.get('author', []),
-                "file_types": filter_options.get('documentType', []) + filter_options.get('data_product_type', []),
-                "document_types": filter_options.get('documentType', []),
-                "languages": filter_options.get('language', []),
-                "topics": filter_options.get('topic', []),
-                "business_units": filter_options.get('owner_business_unit', []),
-                "owner_business": filter_options.get('owner_business', []),
-                "user_groups": filter_options.get('user_group', []),
-                "extensions": filter_options.get('extension', []),
-                "data_product_types": filter_options.get('data_product_type', [])
-            })
+            logging.info(f"Found filter options: {len(filter_options)} categories")
+            
+            # Convert to frontend's expected format
+            return func.HttpResponse(
+                json.dumps({
+                    "authors": filter_options.get('author', []),
+                    "file_types": filter_options.get('documentType', []) + filter_options.get('data_product_type', []),
+                    "document_types": filter_options.get('documentType', []),
+                    "languages": filter_options.get('language', []),
+                    "topics": filter_options.get('topic', []),
+                    "business_units": filter_options.get('owner_business_unit', []),
+                    "owner_business": filter_options.get('owner_business', []),
+                    "user_groups": filter_options.get('user_group', []),
+                    "extensions": filter_options.get('extension', []),
+                    "data_product_types": filter_options.get('data_product_type', [])
+                }),
+                status_code=200,
+                mimetype="application/json"
+            )
             
         except Exception as facet_error:
             logging.warning(f"Faceted search failed, using basic search: {facet_error}")
+            # Fallback to basic search if facets fail
             authors = set()
             topics = set()
             languages = set()
@@ -305,29 +393,44 @@ def get_filter_options():
                 if doc.get("language"):
                     languages.add(doc.get("language"))
             
-            return jsonify({
-                "authors": sorted(list(authors)),
-                "topics": sorted(list(topics)),
-                "languages": sorted(list(languages)),
-                "file_types": ["pdf", "docx", "txt"]
-            })
+            return func.HttpResponse(
+                json.dumps({
+                    "authors": sorted(list(authors)),
+                    "topics": sorted(list(topics)),
+                    "languages": sorted(list(languages)),
+                    "file_types": ["pdf", "docx", "txt"]
+                }),
+                status_code=200,
+                mimetype="application/json"
+            )
         
     except Exception as e:
         logging.error(f"Error in filters endpoint: {str(e)}")
-        return jsonify({
-            "authors": ["Sample Author"],
-            "file_types": ["pdf", "docx"],
-            "error": f"Failed to fetch from Azure Search: {str(e)}",
-            "note": "Returning mock data due to error"
-        })
+        return func.HttpResponse(
+            json.dumps({
+                "authors": ["Sample Author"],
+                "file_types": ["pdf", "docx"],
+                "error": f"Failed to fetch from Azure Search: {str(e)}",
+                "note": "Returning mock data due to error"
+            }),
+            status_code=200,
+            mimetype="application/json"
+        )
 
-@app.route("/debug/fields", methods=["GET"])
-def debug_fields():
+# FUNCTION 4: Debug Fields Endpoint
+@app.route(route="debug/fields", methods=["GET"])
+def debug_fields(req: func.HttpRequest) -> func.HttpResponse:
     """Debug endpoint to discover available fields in the search index"""
+    
     try:
         if not search_client:
-            return jsonify({"error": "Search client not available"}), 503
+            return func.HttpResponse(
+                json.dumps({"error": "Search client not available"}),
+                status_code=503,
+                mimetype="application/json"
+            )
         
+        # Get a sample document to see what fields are available
         results = search_client.search("*", top=1)
         
         sample_doc = None
@@ -339,90 +442,32 @@ def debug_fields():
             break
         
         if not sample_doc:
-            return jsonify({
-                "message": "No documents found in index",
-                "available_fields": [],
-                "sample_document": None
-            })
-        
-        return jsonify({
-            "message": "Available fields in your Azure AI Search index",
-            "available_fields": sorted(available_fields),
-            "sample_document": sample_doc,
-            "field_count": len(available_fields)
-        })
-        
-    except Exception as e:
-        return jsonify({
-            "error": f"Failed to fetch field information: {str(e)}"
-        }), 500
-
-# Azure Functions entry point
-def main(req: func.HttpRequest) -> func.HttpResponse:
-    """Azure Functions HTTP trigger that routes to Flask app"""
-    
-    # Create a WSGI environment from the Azure Functions request
-    import tempfile
-    import wsgiref.util
-    from io import StringIO
-    
-    # Get the path from the route parameter
-    route = req.route_params.get('route', '')
-    path = f"/{route}" if route else "/"
-    
-    # Create WSGI environ
-    environ = {
-        'REQUEST_METHOD': req.method,
-        'PATH_INFO': path,
-        'QUERY_STRING': req.url.split('?', 1)[1] if '?' in req.url else '',
-        'CONTENT_TYPE': req.headers.get('content-type', ''),
-        'CONTENT_LENGTH': str(len(req.get_body())),
-        'SERVER_NAME': 'localhost',
-        'SERVER_PORT': '80',
-        'wsgi.version': (1, 0),
-        'wsgi.input': StringIO(req.get_body().decode('utf-8')),
-        'wsgi.errors': StringIO(),
-        'wsgi.multithread': True,
-        'wsgi.multiprocess': False,
-        'wsgi.run_once': False,
-        'wsgi.url_scheme': 'https',
-    }
-    
-    # Add headers to environ
-    for key, value in req.headers.items():
-        key = key.upper().replace('-', '_')
-        if key not in ('CONTENT_TYPE', 'CONTENT_LENGTH'):
-            environ[f'HTTP_{key}'] = value
-    
-    # Response data
-    response_data = []
-    
-    def start_response(status, headers):
-        response_data.extend([status, headers])
-    
-    # Call Flask app
-    try:
-        with app.app_context():
-            flask_response = app.wsgi_app(environ, start_response)
-            response_body = b''.join(flask_response).decode('utf-8')
-        
-        # Parse status code
-        status_code = int(response_data[0].split(' ')[0])
-        
-        # Parse headers
-        headers_dict = {}
-        for header_name, header_value in response_data[1]:
-            headers_dict[header_name] = header_value
+            return func.HttpResponse(
+                json.dumps({
+                    "message": "No documents found in index",
+                    "available_fields": [],
+                    "sample_document": None
+                }),
+                status_code=200,
+                mimetype="application/json"
+            )
         
         return func.HttpResponse(
-            response_body,
-            status_code=status_code,
-            headers=headers_dict
+            json.dumps({
+                "message": "Available fields in your Azure AI Search index",
+                "available_fields": sorted(available_fields),
+                "sample_document": sample_doc,
+                "field_count": len(available_fields)
+            }),
+            status_code=200,
+            mimetype="application/json"
         )
         
     except Exception as e:
-        logging.error(f"Error processing request: {str(e)}")
         return func.HttpResponse(
-            f"Internal server error: {str(e)}",
-            status_code=500
+            json.dumps({
+                "error": f"Failed to fetch field information: {str(e)}"
+            }),
+            status_code=500,
+            mimetype="application/json"
         )
